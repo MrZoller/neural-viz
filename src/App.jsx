@@ -1497,6 +1497,11 @@ print("Weights loaded from neural-viz-params.json")`;
             <div className="text-slate-500 mb-1 font-mono" style={{ fontSize: '9px' }}>
               W [{outSize}×{inSize}]<span className="text-slate-700 ml-1">rows=out neuron, cols=in neuron</span>
             </div>
+            {/* Storage/PyTorch orientation note */}
+            <div className="bg-slate-900/60 border border-slate-700/50 rounded px-2 py-1 mb-1.5 text-slate-500 leading-snug" style={{ fontSize: '8.5px' }}>
+              Shape: <span className="text-slate-400 font-mono">[out_features, in_features]</span> — same as <span className="text-emerald-500/80 font-mono">nn.Linear.weight</span>.
+              <span className="block mt-0.5 text-slate-600">W[j][k] = weight from input k → output j. Loads into PyTorch directly; no transposition needed.</span>
+            </div>
             <div className="overflow-x-auto">
               <table className="border-collapse">
                 <thead>
