@@ -291,6 +291,353 @@ for epoch in range(max_epochs):
 }
 
 // =============================================================================
+// SECTION 10b — EXPORT UTILITIES
+// generateFullScript  → runnable .py file (clipboard copy)
+// generateNotebook    → .ipynb JSON (browser download, no backend)
+//
+// Neither function exports the current trained weights; both reinitialize
+// randomly. The architecture and hyper-parameters do match the current UI.
+// =============================================================================
+
+function generateFullScript(layerSizes, hiddenActivationTypes, learningRate) {
+  const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
+  const paramCount = layerSizes.slice(0, -1).reduce(
+    (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
+  );
+  const modelLines = [];
+  modelLines.push(`    nn.Linear(${layerSizes[0]}, ${layerSizes[1]}),`);
+  modelLines.push(`    ${actMap[hiddenActivationTypes[0]] || 'nn.ReLU()'},`);
+  for (let i = 1; i < layerSizes.length - 2; i++) {
+    modelLines.push(`    nn.Linear(${layerSizes[i]}, ${layerSizes[i + 1]}),`);
+    modelLines.push(`    ${actMap[hiddenActivationTypes[i]] || 'nn.ReLU()'},`);
+  }
+  modelLines.push(`    nn.Linear(${layerSizes[layerSizes.length - 2]}, 1),`);
+  modelLines.push(`    nn.Sigmoid(),`);
+
+  return `#!/usr/bin/env python3
+"""
+XOR Neural Network — exported from Neural Network Learning Tool
+Architecture : ${layerSizes.slice(0, -1).join(' -> ')} -> 1
+Activations  : ${hiddenActivationTypes.join(', ')} + Sigmoid (output)
+Parameters   : ${paramCount}
+Learning rate: ${learningRate}
+
+Note: weights are randomly re-initialized, not copied from the simulator.
+      Re-run until convergence — this architecture reliably solves XOR.
+"""
+import torch
+import torch.nn as nn
+import matplotlib.pyplot as plt
+
+torch.manual_seed(42)  # remove for random init each run
+
+# -- Dataset ------------------------------------------------------------------
+# XOR: output is 1 iff exactly one input is 1 (not linearly separable).
+X = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=torch.float)
+y = torch.tensor([[0],    [1],    [1],    [0]],     dtype=torch.float)
+
+# -- Model --------------------------------------------------------------------
+# nn.Linear(in, out) creates weight matrix W [out x in] and bias b [out].
+# Each layer computes: a = activation(W*x + b)
+model = nn.Sequential(
+${modelLines.join('\n')}
+)
+print(f"Parameters: {sum(p.numel() for p in model.parameters())}")
+
+# -- Loss and optimizer -------------------------------------------------------
+# BCELoss: L = -(1/N) * sum[y*log(y_hat) + (1-y)*log(1-y_hat)]
+# SGD:     W <- W - lr * dL/dW   (same update rule as the simulator)
+criterion = nn.BCELoss()
+optimizer  = torch.optim.SGD(model.parameters(), lr=${learningRate})
+
+# -- Training loop ------------------------------------------------------------
+losses = []
+for epoch in range(10_000):
+    optimizer.zero_grad()        # clear accumulated gradients
+    out  = model(X)              # forward pass (activations left -> right)
+    loss = criterion(out, y)     # BCE loss over all 4 XOR samples
+    loss.backward()              # backprop: dL/dW via chain rule
+    optimizer.step()             # W <- W - lr * dL/dW
+    losses.append(loss.item())
+    if loss.item() < 0.001:      # same convergence threshold as simulator
+        print(f"Converged at epoch {epoch + 1},  loss = {loss.item():.6f}")
+        break
+else:
+    print(f"Max epochs reached,  final loss = {losses[-1]:.6f}")
+
+# -- Loss curve ---------------------------------------------------------------
+plt.figure(figsize=(8, 3))
+plt.plot(losses, lw=1, color="#60a5fa", label="BCE Loss")
+plt.axhline(0.001, color="#10b981", ls="--", lw=1, label="convergence (0.001)")
+plt.xlabel("Epoch"); plt.ylabel("BCE Loss"); plt.title("XOR Training Loss")
+plt.legend(); plt.tight_layout(); plt.show()
+
+# -- XOR verification ---------------------------------------------------------
+# model.eval() disables training-only layers (none here, but good practice).
+# torch.no_grad() skips gradient tracking during inference.
+model.eval()
+with torch.no_grad():
+    preds = model(X)
+
+print("\\nXOR Verification:")
+print(f"{'Input':<12} {'Expected':<10} {'p(class=1)':<14} {'Class':<8} Correct?")
+print("-" * 55)
+all_correct = True
+for xi, yi, pi in zip(X, y, preds):
+    p    = pi.item()
+    pred = 1 if p > 0.5 else 0
+    conf = abs(p - 0.5) * 2
+    ok   = pred == int(yi.item())
+    all_correct = all_correct and ok
+    print(f"{str(xi.tolist()):<12} {int(yi.item()):<10} {p:.4f}         {pred:<8} {'OK' if ok else 'WRONG'}  ({conf:.0%})")
+print("\\nAll correct!" if all_correct else "\\nNot all correct -- try re-running.")
+
+# -- Decision boundary --------------------------------------------------------
+grid_n = 60
+xs     = torch.linspace(0, 1, grid_n)
+xx, yy = torch.meshgrid(xs, xs, indexing="xy")
+grid   = torch.stack([xx.flatten(), yy.flatten()], dim=1)
+with torch.no_grad():
+    grid_p = model(grid).reshape(grid_n, grid_n).numpy()
+
+fig, ax = plt.subplots(figsize=(4, 4))
+ax.contourf(xs.numpy(), xs.numpy(), grid_p,
+            levels=[0, 0.5, 1], colors=["#3b82f6", "#f97316"], alpha=0.35)
+ax.contour(xs.numpy(), xs.numpy(), grid_p, levels=[0.5], colors="white", linewidths=1)
+for xi, yi in zip(X, y):
+    c = "#f97316" if yi.item() == 1 else "#3b82f6"
+    ax.scatter(xi[0].item(), xi[1].item(), color=c, s=120, zorder=5,
+               edgecolors="white", linewidths=1.5)
+ax.set_xlabel("x1"); ax.set_ylabel("x2"); ax.set_title("Decision Boundary")
+plt.tight_layout(); plt.show()
+
+# -- Custom inference ---------------------------------------------------------
+test_pt = torch.tensor([[0.2, 0.8]], dtype=torch.float)
+with torch.no_grad():
+    prob = model(test_pt).item()
+conf = abs(prob - 0.5) * 2
+print(f"\\nInference: {test_pt.tolist()[0]} -> p(1)={prob:.4f}, "
+      f"class={1 if prob > 0.5 else 0}, conf={conf:.0%}")
+`;
+}
+
+// Generates an .ipynb JSON that Jupyter can open directly.
+// Architecture, activations, and learning rate match the current UI state.
+// Each cell's source is an array of line-strings as the nbformat v4 spec requires.
+function generateNotebook(layerSizes, hiddenActivationTypes, learningRate) {
+  const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
+  const paramCount = layerSizes.slice(0, -1).reduce(
+    (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
+  );
+
+  // nbformat v4: source is an array where every line except the last ends with '\n'
+  const toSrc = str => {
+    const lines = str.replace(/^\n/, '').replace(/\n$/, '').split('\n');
+    return lines.map((l, i) => (i < lines.length - 1 ? l + '\n' : l));
+  };
+  const md   = s => ({ cell_type: 'markdown', metadata: {}, source: toSrc(s) });
+  const code = s => ({
+    cell_type: 'code', execution_count: null, metadata: {}, outputs: [],
+    source: toSrc(s),
+  });
+
+  const modelLines = [];
+  modelLines.push(`    nn.Linear(${layerSizes[0]}, ${layerSizes[1]}),`);
+  modelLines.push(`    ${actMap[hiddenActivationTypes[0]] || 'nn.ReLU()'},`);
+  for (let i = 1; i < layerSizes.length - 2; i++) {
+    modelLines.push(`    nn.Linear(${layerSizes[i]}, ${layerSizes[i + 1]}),`);
+    modelLines.push(`    ${actMap[hiddenActivationTypes[i]] || 'nn.ReLU()'},`);
+  }
+  modelLines.push(`    nn.Linear(${layerSizes[layerSizes.length - 2]}, 1),`);
+  modelLines.push(`    nn.Sigmoid(),`);
+  const modelBlock = modelLines.join('\n');
+
+  const archStr = layerSizes.slice(0, -1).join(' → ') + ' → 1';
+  const actStr  = hiddenActivationTypes.join(', ');
+
+  return {
+    nbformat: 4,
+    nbformat_minor: 5,
+    metadata: {
+      kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' },
+      language_info: { name: 'python', version: '3.9.0' },
+    },
+    cells: [
+      md(`# XOR Neural Network — Neural Network Learning Tool Export
+
+This notebook was exported from the **Neural Network Learning Tool** — an interactive MLP
+simulator that trains on XOR using real backpropagation (no ML libraries).
+
+## Configuration
+
+| Property | Value |
+|----------|-------|
+| Architecture | ${archStr} |
+| Hidden activations | ${actStr} |
+| Output activation | Sigmoid |
+| Loss function | Binary Cross-Entropy (BCELoss) |
+| Optimizer | SGD, lr = ${learningRate} |
+| Total parameters | ${paramCount} |
+
+> **Note:** Weights are randomly re-initialized here, not copied from the simulator.
+> Re-run cells until convergence — this architecture reliably solves XOR.`),
+
+      code(`import torch
+import torch.nn as nn
+import matplotlib.pyplot as plt
+
+torch.manual_seed(42)  # remove for random init each run
+print("PyTorch:", torch.__version__)`),
+
+      md(`## 1 · XOR Dataset
+
+XOR outputs **1** iff exactly one input is 1. It is *not linearly separable* —
+a single-layer perceptron cannot solve it, but a two-layer MLP can.
+
+| x₁ | x₂ | y |
+|:--:|:--:|:-:|
+| 0  | 0  | 0 |
+| 0  | 1  | 1 |
+| 1  | 0  | 1 |
+| 1  | 1  | 0 |`),
+
+      code(`X = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=torch.float)
+y = torch.tensor([[0],    [1],    [1],    [0]],     dtype=torch.float)
+print("X:", X.shape, " y:", y.shape)`),
+
+      md(`## 2 · Model Definition
+
+\`nn.Linear(in, out)\` creates a weight matrix **W** [out × in] and bias **b** [out].
+Each layer's forward computation: **z = W·x + b**, then **a = activation(z)**.
+
+This matches the network graph in the simulator — every node is one activation value.`),
+
+      code(`model = nn.Sequential(
+${modelBlock}
+)
+print(f"Parameters: {sum(p.numel() for p in model.parameters())}")
+print(model)`),
+
+      md(`## 3 · Loss Function and Optimizer
+
+**Binary Cross-Entropy (BCELoss):**
+
+$$L = -\\frac{1}{N} \\sum_{i=1}^{N} \\bigl[ y_i \\log(\\hat{y}_i) + (1-y_i)\\log(1-\\hat{y}_i) \\bigr]$$
+
+**SGD** updates weights via gradient descent:
+
+$$W \\leftarrow W - \\eta \\cdot \\frac{\\partial L}{\\partial W}, \\quad \\eta = ${learningRate}$$`),
+
+      code(`criterion = nn.BCELoss()
+optimizer  = torch.optim.SGD(model.parameters(), lr=${learningRate})
+print(criterion)
+print(optimizer)`),
+
+      md(`## 4 · Training Loop
+
+Each epoch is a full pass over all 4 XOR samples. The five lines map directly
+to the **Explained Step** mode in the simulator:
+
+| Step | Code | Simulator stage |
+|------|------|-----------------|
+| Clear gradients | \`optimizer.zero_grad()\` | — |
+| Forward pass | \`out = model(X)\` | Stage 1 |
+| Compute loss | \`loss = criterion(out, y)\` | Stage 2 |
+| Backpropagation | \`loss.backward()\` | Stage 3 |
+| Weight update | \`optimizer.step()\` | Stage 4 |`),
+
+      code(`losses = []
+for epoch in range(10_000):
+    optimizer.zero_grad()        # clear accumulated gradients
+    out  = model(X)              # forward pass: activations left -> right
+    loss = criterion(out, y)     # BCE loss over all 4 samples
+    loss.backward()              # backprop: dL/dW via chain rule
+    optimizer.step()             # W <- W - lr * dL/dW
+    losses.append(loss.item())
+    if loss.item() < 0.001:      # same convergence threshold as simulator
+        print(f"Converged at epoch {epoch + 1},  loss = {loss.item():.6f}")
+        break
+else:
+    print(f"Max epochs reached.  Final loss = {losses[-1]:.6f}")`),
+
+      md(`## 5 · Loss Curve
+
+A healthy training run shows BCE loss falling monotonically toward the convergence
+threshold (0.001). If it plateaus, try reinitializing with a new seed, switching
+to **Tanh** activations, or using **Adam** (lr=0.01).`),
+
+      code(`fig, ax = plt.subplots(figsize=(8, 3))
+ax.plot(losses, lw=1, color="#60a5fa", label="BCE Loss")
+ax.axhline(0.001, color="#10b981", ls="--", lw=1, label="convergence (0.001)")
+ax.set_xlabel("Epoch"); ax.set_ylabel("BCE Loss"); ax.set_title("XOR Training Loss")
+ax.legend(); plt.tight_layout(); plt.show()`),
+
+      md(`## 6 · XOR Verification
+
+Inference best practice:
+- \`model.eval()\` — disables dropout / batch-norm (none here, good habit)
+- \`torch.no_grad()\` — skips gradient computation → faster, less memory
+
+**Confidence** = \`|p − 0.5| × 2\`: 0 = on the decision boundary, 1 = fully certain.`),
+
+      code(`model.eval()
+with torch.no_grad():
+    preds = model(X)
+
+print(f"{'Input':<12} {'Expected':<10} {'p(1)':<10} {'Class':<8} OK?")
+print("-" * 45)
+all_ok = True
+for xi, yi, pi in zip(X, y, preds):
+    p  = pi.item(); pred = 1 if p > 0.5 else 0
+    ok = pred == int(yi.item()); all_ok = all_ok and ok
+    print(f"{str(xi.tolist()):<12} {int(yi.item()):<10} {p:.4f}     {pred:<8} {'V' if ok else 'X'}  ({abs(p-.5)*2:.0%})")
+print("\\nAll correct!" if all_ok else "\\nNot all correct -- re-run.")`),
+
+      md(`## 7 · Decision Boundary
+
+Grid the input space [0, 1]² and run a forward pass at every point.
+Blue = class 0, orange = class 1, white contour = decision boundary (p = 0.5).
+This matches the **Decision Boundary** canvas in the simulator.`),
+
+      code(`grid_n = 60
+xs     = torch.linspace(0, 1, grid_n)
+xx, yy = torch.meshgrid(xs, xs, indexing="xy")
+grid   = torch.stack([xx.flatten(), yy.flatten()], dim=1)
+model.eval()
+with torch.no_grad():
+    grid_p = model(grid).reshape(grid_n, grid_n).numpy()
+
+fig, ax = plt.subplots(figsize=(4, 4))
+ax.contourf(xs.numpy(), xs.numpy(), grid_p,
+            levels=[0, 0.5, 1], colors=["#3b82f6", "#f97316"], alpha=0.4)
+ax.contour(xs.numpy(), xs.numpy(), grid_p, levels=[0.5], colors="white", linewidths=1.2)
+for xi, yi in zip(X, y):
+    c = "#f97316" if yi.item() == 1 else "#3b82f6"
+    ax.scatter(xi[0].item(), xi[1].item(), color=c, s=150, zorder=5,
+               edgecolors="white", linewidths=1.5)
+ax.set_xlabel("x1"); ax.set_ylabel("x2"); ax.set_title("Decision Boundary")
+ax.set_xlim(-0.05, 1.05); ax.set_ylim(-0.05, 1.05)
+plt.tight_layout(); plt.show()`),
+
+      md(`## 8 · Custom Inference
+
+Run the trained network on any point in [0, 1]².
+Always use \`model.eval()\` + \`torch.no_grad()\` for inference.`),
+
+      code(`test_pt = torch.tensor([[0.2, 0.8]], dtype=torch.float)
+model.eval()
+with torch.no_grad():
+    prob = model(test_pt).item()
+conf = abs(prob - 0.5) * 2
+print(f"Input:      {test_pt.tolist()[0]}")
+print(f"p(class=1): {prob:.4f}")
+print(f"Class:      {1 if prob > 0.5 else 0}")
+print(f"Confidence: {conf:.1%}  (= |p - 0.5| * 2)")`),
+    ],
+  };
+}
+
+// =============================================================================
 // SECTION 11 — COLOR UTILITIES
 // =============================================================================
 
@@ -1153,21 +1500,138 @@ function ConceptCallout({ type, onDismiss, trainingStatus, hiddenActivationTypes
 }
 
 // =============================================================================
-// COMPONENT: PyTorchSidebar
-// Must be used inside a flex-col container with a bounded height.
+// COMPONENT: PyTorchPanel
+//
+// Replaces the old PyTorchSidebar. Three sections:
+//   1. Compact mapping summary (architecture, activations, loss, optimizer,
+//      params, visual-concept → PyTorch API table)
+//   2. Export buttons: copy runnable .py script, download .ipynb notebook
+//   3. Collapsible full PyTorch code (collapsed by default)
+//
+// Weights are NOT exported — the generated code reinitializes randomly.
+// A note in the UI and the exported files makes this explicit.
 // =============================================================================
-function PyTorchSidebar({ layerSizes, hiddenActivationTypes }) {
+function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate }) {
+  const [codeExpanded, setCodeExpanded] = useState(false);
+  const [copyDone,     setCopyDone]     = useState(false);
+
+  const paramCount = layerSizes.slice(0, -1).reduce(
+    (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
+  );
+  const actLabels = hiddenActivationTypes.map(t => ACTIVATIONS[t]?.label || t).join(', ');
+
+  const handleCopyScript = () => {
+    const script = generateFullScript(layerSizes, hiddenActivationTypes, learningRate);
+    const write = () => {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(script).catch(fallback);
+      } else { fallback(); }
+    };
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = script; ta.style.cssText = 'position:fixed;opacity:0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    };
+    write();
+    setCopyDone(true);
+    setTimeout(() => setCopyDone(false), 2000);
+  };
+
+  const handleExportNotebook = () => {
+    const nb   = generateNotebook(layerSizes, hiddenActivationTypes, learningRate);
+    const blob = new Blob([JSON.stringify(nb, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'neural-viz-xor.ipynb'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
-    <div className="bg-gray-950 rounded-lg border border-slate-700 p-3 h-full overflow-y-auto">
-      <div className="flex items-center gap-1.5 mb-2">
-        {['bg-red-500','bg-yellow-500','bg-green-500'].map((c,i) => (
-          <div key={i} className={`w-2.5 h-2.5 rounded-full ${c}`} />
-        ))}
-        <span className="text-slate-400 text-xs ml-1 font-mono">model.py</span>
+    <div className="flex-shrink-0 border-b border-slate-700">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 pt-2.5 pb-1">
+        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">PyTorch Mapping</h2>
+        <span className="text-xs text-slate-600">explanatory only</span>
       </div>
-      <pre className="text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap">
-        {generatePyTorchCode(layerSizes, hiddenActivationTypes)}
-      </pre>
+
+      {/* Compact summary */}
+      <div className="px-3 pb-1.5 text-xs font-mono space-y-0.5">
+        <div>
+          <span className="text-slate-600">arch  </span>
+          <span className="text-slate-200">{layerSizes.slice(0,-1).join('→')}→1</span>
+          <span className="text-slate-600"> · </span>
+          <span className="text-amber-400">{paramCount}p</span>
+        </div>
+        <div>
+          <span className="text-slate-600">act   </span>
+          <span className="text-slate-300">{actLabels}</span>
+          <span className="text-slate-600">, Sigmoid(out)</span>
+        </div>
+        <div>
+          <span className="text-slate-600">opt   </span>
+          <span className="text-slate-300">SGD lr={learningRate.toFixed(3)}</span>
+          <span className="text-slate-600"> · </span>
+          <span className="text-slate-300">BCELoss</span>
+        </div>
+
+        {/* Visual concept → PyTorch API mapping */}
+        <div className="border-t border-slate-800 pt-1.5 mt-1">
+          <div className="text-slate-600 mb-1 text-xs">Visual → PyTorch</div>
+          {[
+            ['nodes/edges',  'nn.Linear(in, out)'],
+            ['forward pass', 'out = model(X)'],
+            ['loss',         'criterion(out, y)'],
+            ['backprop',     'loss.backward()'],
+            ['W ← W−lr·∂W', 'optimizer.step()'],
+            ['inference',    'model.eval() + no_grad()'],
+          ].map(([vis, pt]) => (
+            <div key={vis} className="flex items-baseline gap-1 leading-tight py-px">
+              <span className="text-slate-500 w-24 shrink-0 truncate">{vis}</span>
+              <span className="text-slate-700 shrink-0">→</span>
+              <span className="text-emerald-400/80 truncate">{pt}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Weights-not-exported notice */}
+        <div className="border-t border-slate-800 pt-1 mt-0.5 text-slate-600 leading-tight">
+          Exported code reinitializes weights randomly — architecture matches, values don't.
+        </div>
+      </div>
+
+      {/* Export buttons */}
+      <div className="flex gap-1.5 px-3 pb-2.5">
+        <button onClick={handleCopyScript}
+          className={`flex-1 py-1 rounded text-xs border transition-colors ${
+            copyDone
+              ? 'bg-emerald-900/40 text-emerald-400 border-emerald-700/50'
+              : 'bg-slate-700 hover:bg-slate-600 text-slate-300 border-slate-600'
+          }`}>
+          {copyDone ? '✓ Copied!' : '📋 Copy Script'}
+        </button>
+        <button onClick={handleExportNotebook}
+          className="flex-1 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 border border-slate-600 transition-colors">
+          📓 Notebook
+        </button>
+      </div>
+
+      {/* Collapsible full code */}
+      <button
+        onClick={() => setCodeExpanded(v => !v)}
+        className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-500 hover:text-slate-300 hover:bg-slate-800/40 border-t border-slate-800 transition-colors">
+        <span className="font-mono">Full PyTorch code</span>
+        <span className="font-mono text-slate-600">{codeExpanded ? '▲' : '▼'}</span>
+      </button>
+      {codeExpanded && (
+        <div className="bg-gray-950 border-t border-slate-800 overflow-y-auto"
+             style={{ maxHeight: '220px' }}>
+          <pre className="text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap p-3">
+            {generatePyTorchCode(layerSizes, hiddenActivationTypes)}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }
@@ -2117,16 +2581,11 @@ export default function App() {
         ═══════════════════════════════════════════════════════════════════ */}
         <div className="w-80 border-l border-slate-700 flex flex-col overflow-hidden flex-shrink-0">
 
-          <div className="flex flex-col flex-shrink-0 p-3 border-b border-slate-700"
-               style={{ height: '240px' }}>
-            <div className="flex items-center justify-between mb-1.5 flex-shrink-0">
-              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">PyTorch Equivalent</h2>
-              <span className="text-xs text-slate-600">explanatory only</span>
-            </div>
-            <div className="flex-1 min-h-0">
-              <PyTorchSidebar layerSizes={layerSizes} hiddenActivationTypes={activationTypes} />
-            </div>
-          </div>
+          <PyTorchPanel
+            layerSizes={layerSizes}
+            hiddenActivationTypes={activationTypes}
+            learningRate={learningRate}
+          />
 
           <div className="flex-shrink-0 p-3 border-b border-slate-700">
             <div className="bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
