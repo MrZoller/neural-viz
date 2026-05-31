@@ -835,7 +835,7 @@ function MathAuditPanel({ xorResults, hiddenActivationTypes, layerSizes }) {
 // Shows both values side by side with the absolute and relative error so the
 // user can see for themselves that the math is correct.
 // =============================================================================
-function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes }) {
+function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGradients }) {
   const [layerIdx, setLayerIdx] = useState(0);
   const [rowIdx,   setRowIdx]   = useState(0);
   const [colIdx,   setColIdx]   = useState(0);
@@ -856,6 +856,29 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes }) {
   const handleLayerChange = (v) => { setLayerIdx(+v); setResult(null); };
   const handleRowChange   = (v) => { setRowIdx(+v);   setResult(null); };
   const handleColChange   = (v) => { setColIdx(+v);   setResult(null); };
+
+  // Scan lastGradients for the weight with the largest |∂L/∂w| and jump to it.
+  // Picking the highest-magnitude gradient gives the most interesting check:
+  // a near-zero finite-difference on a near-zero gradient tells you very little,
+  // but exact agreement on a large gradient is strong evidence backprop is right.
+  const handleAutoPick = () => {
+    if (!lastGradients) return;
+    let bestL = 0, bestJ = 0, bestK = 0, bestMag = -1;
+    lastGradients.dWeights.forEach((W, l) => {
+      W.forEach((row, j) => {
+        row.forEach((v, k) => {
+          if (Math.abs(v) > bestMag) {
+            bestMag = Math.abs(v);
+            bestL = l; bestJ = j; bestK = k;
+          }
+        });
+      });
+    });
+    setLayerIdx(bestL);
+    setRowIdx(bestJ);
+    setColIdx(bestK);
+    setResult(null);
+  };
 
   const handleRun = () => {
     const r = runGradientCheck(
@@ -917,10 +940,17 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes }) {
         </div>
       </div>
 
-      <button onClick={handleRun}
-        className="w-full py-1 rounded text-xs bg-indigo-900/60 hover:bg-indigo-800 text-indigo-300 border border-indigo-700/50 mb-3">
-        Run Check  (ε = 1e-4)
-      </button>
+      <div className="flex gap-1.5 mb-3">
+        <button onClick={handleAutoPick} disabled={!lastGradients}
+          title="Select the weight with the largest |∂L/∂w| from the last backward pass"
+          className="flex-1 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 border border-slate-600 disabled:opacity-40 disabled:cursor-not-allowed">
+          Auto-pick max |∂w|
+        </button>
+        <button onClick={handleRun}
+          className="flex-1 py-1 rounded text-xs bg-indigo-900/60 hover:bg-indigo-800 text-indigo-300 border border-indigo-700/50">
+          Run Check  (ε = 1e-4)
+        </button>
+      </div>
 
       {/* Results ─────────────────────────────────────────────────────────── */}
       {result && (
@@ -1884,6 +1914,7 @@ export default function App() {
                     network={network}
                     hiddenActivationTypes={activationTypes}
                     layerSizes={layerSizes}
+                    lastGradients={lastGradients}
                   />
                 )}
               </div>
