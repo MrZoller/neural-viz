@@ -1057,10 +1057,45 @@ function TrainingStatusBar({ status, epoch, loss, bestLoss, epochsSinceImprove, 
 // =============================================================================
 // COMPONENT: ConceptCallout
 // =============================================================================
-function ConceptCallout({ type, onDismiss, trainingStatus }) {
+function ConceptCallout({ type, onDismiss, trainingStatus, hiddenActivationTypes }) {
   // 'stepping' means the explained-step animation is mid-backward-pass — backprop
   // is actively animating, so treat it like 'training' for wording purposes.
   const stopped = !['training', 'stepping'].includes(trainingStatus);
+  const hasReLU = hiddenActivationTypes?.some(t => t === 'relu');
+
+  const plateauBody = (
+    <div className="space-y-2">
+      {hasReLU && (
+        <p className="text-orange-200/80 leading-relaxed">
+          <span className="font-semibold">Dead ReLU neurons:</span>{' '}
+          ReLU outputs 0 whenever its pre-activation is negative. If enough
+          weights go negative during training, a neuron fires 0 for every input —
+          its gradient is always 0 and it never recovers. This is a common cause
+          of XOR plateaus with ReLU networks.
+        </p>
+      )}
+      <p className="text-slate-400">
+        Loss has not improved by &gt;{MIN_IMPROVEMENT} in {PLATEAU_PATIENCE} epochs
+        (still above {PLATEAU_MIN_LOSS}). Try in this order:
+      </p>
+      <ol className="space-y-1">
+        {[
+          ['Reset weights', 'Reinitialize with a new random seed — free, no architecture change. Different init may avoid dead neurons entirely.'],
+          ['Switch to Tanh', 'Tanh gradient is nonzero everywhere: σ\'(z) = 1−tanh²(z) > 0 for all z. Neurons can\'t go dead. Best first fix for ReLU plateaus.'],
+          ['Adjust learning rate', 'Too large → oscillates and overshoots; too small → never escapes flat regions. Try 0.01–0.05, or use Adam which adapts LR per weight.'],
+          ['Add capacity last', 'More neurons or layers won\'t help if gradients are already near zero. Exhaust the above options first.'],
+        ].map(([title, desc], i) => (
+          <li key={i} className="flex gap-1.5">
+            <span className="text-orange-400 font-bold shrink-0">{i + 1}.</span>
+            <span className="text-slate-300">
+              <span className="font-semibold text-slate-200">{title}</span>
+              {' — '}{desc}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
 
   const callouts = {
     firstForward: {
@@ -1078,8 +1113,8 @@ function ConceptCallout({ type, onDismiss, trainingStatus }) {
     },
     lossPlateauing: {
       title: 'Loss Plateaued — Network is Stuck', color: 'border-orange-500', icon: '⚠',
-      body: `Loss has not meaningfully improved in ${PLATEAU_PATIENCE} epochs and is still above ${PLATEAU_MIN_LOSS}. Training stopped. Try: increasing the learning rate, adding neurons/layers, or switching activation functions.`,
-      pytorch: '# Try: optimizer = torch.optim.Adam(model.parameters(), lr=0.01)',
+      body: plateauBody,
+      pytorch: '# Adam adapts the learning rate per weight — more robust than SGD:\noptimizer = torch.optim.Adam(model.parameters(), lr=0.01)',
     },
     converged: {
       title: 'XOR Solved ✓', color: 'border-emerald-500', icon: '✓',
@@ -1108,7 +1143,8 @@ function ConceptCallout({ type, onDismiss, trainingStatus }) {
         </span>
         <button onClick={onDismiss} className="text-slate-500 hover:text-white ml-2 text-xs">✕</button>
       </div>
-      <p className="text-slate-300 mt-1 text-xs leading-relaxed">{c.body}</p>
+      {/* body can be a string or JSX — both render fine inside a div */}
+      <div className="text-slate-300 mt-1 text-xs leading-relaxed">{c.body}</div>
       {c.pytorch && (
         <pre className="mt-2 text-xs bg-black/40 rounded p-2 text-emerald-400 overflow-x-auto">{c.pytorch}</pre>
       )}
@@ -1841,7 +1877,8 @@ export default function App() {
           {activeCallouts.length > 0 && (
             <div className="flex flex-col gap-2 flex-shrink-0">
               {activeCallouts.map(type => (
-                <ConceptCallout key={type} type={type} onDismiss={() => dismissCallout(type)} trainingStatus={trainingStatus} />
+                <ConceptCallout key={type} type={type} onDismiss={() => dismissCallout(type)}
+                  trainingStatus={trainingStatus} hiddenActivationTypes={activationTypes} />
               ))}
             </div>
           )}
