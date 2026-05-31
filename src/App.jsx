@@ -618,15 +618,22 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
 
       {/* ── Gradient legend ────────────────────────────────────────────────── */}
       {backpropData && (
-        <g transform="translate(8,285)">
-          <text fill="#94a3b8" fontSize={9}>∂L/∂W:</text>
-          {[0,.25,.5,.75,1].map((t, i) => (
-            <rect key={i} x={48+i*12} y={-8} width={12} height={10} fill={gradientColor(t, 1)} />
+        <g transform="translate(8,280)">
+          {/* Clarify: colors encode absolute magnitude, not signed value.
+              The sign is present in the numeric labels on edges (positive = weight
+              should decrease; negative = weight should increase). */}
+          <text fill="#6b7280" fontSize={7.5}>
+            Edge color = |∂L/∂w|  (absolute magnitude · avg over 4 XOR samples)
+          </text>
+          {[0, .17, .33, .5, .67, .83, 1].map((t, i) => (
+            <rect key={i} x={8 + i * 14} y={8} width={14} height={8} fill={gradientColor(t, 1)} />
           ))}
-          <text x={48}  y={12} fill="#94a3b8" fontSize={8}>0</text>
-          <text x={92}  y={12} fill="#94a3b8" fontSize={8}>max</text>
-          <text x={120} y={12} fill="#64748b" fontSize={7.5}>
-            {totalEdges > 16 ? '(top 8 labeled)' : '(all labeled)'}
+          <text x={8}   y={24} fill="#94a3b8" fontSize={7.5} textAnchor="start">0</text>
+          <text x={106} y={24} fill="#94a3b8" fontSize={7.5} textAnchor="end">
+            {maxGradMag > 0 ? `max = ${maxGradMag.toFixed(4)}` : 'max = n/a'}
+          </text>
+          <text x={115} y={24} fill="#4b5563" fontSize={7}>
+            {totalEdges > 16 ? '(top 8 edges labeled)' : '(all edges labeled)'}
           </text>
         </g>
       )}
@@ -1051,7 +1058,9 @@ function TrainingStatusBar({ status, epoch, loss, bestLoss, epochsSinceImprove, 
 // COMPONENT: ConceptCallout
 // =============================================================================
 function ConceptCallout({ type, onDismiss, trainingStatus }) {
-  const stopped = trainingStatus !== 'training';
+  // 'stepping' means the explained-step animation is mid-backward-pass — backprop
+  // is actively animating, so treat it like 'training' for wording purposes.
+  const stopped = !['training', 'stepping'].includes(trainingStatus);
 
   const callouts = {
     firstForward: {
@@ -1565,14 +1574,6 @@ export default function App() {
     ? null
     : lastGradients;
 
-  // Stage indicator text and color for the network graph header
-  const stageInfo = {
-    forward:  { text: '→ Stage 1: Forward Pass  [0,0]', cls: 'text-blue-400' },
-    loss:     { text: `📊 Stage 2: Loss = ${stepModeLoss?.toFixed(5) ?? '…'}`, cls: 'text-amber-400' },
-    backward: { text: '← Stage 3: Backprop  ∂L/∂W on edges', cls: 'text-violet-400' },
-    update:   { text: '↻ Stage 4: W ← W − lr·∂L/∂W', cls: 'text-emerald-400' },
-  }[stepModeStage];
-
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 font-sans flex flex-col">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
@@ -1697,18 +1698,27 @@ export default function App() {
           {/* Inference result */}
           <section>
             <div className="text-xs text-slate-500 bg-slate-800/50 rounded p-2">
-              <span className="text-slate-400 font-medium block mb-1">Click to Infer</span>
-              Click the decision boundary canvas to run inference and animate the forward pass.
+              <span className="text-slate-400 font-medium block mb-0.5">Click to Predict</span>
+              Click anywhere on the decision boundary to run a real forward pass and animate it.
             </div>
             {inferencePoint && (
-              <div className="mt-1.5 text-xs font-mono bg-slate-800 rounded p-2 space-y-0.5">
-                <div className="text-slate-400">x₁={inferencePoint.x.toFixed(3)} x₂={inferencePoint.y.toFixed(3)}</div>
-                <div className={inferencePoint.prediction > 0.5 ? 'text-orange-400' : 'text-blue-400'}>
-                  Class: {inferencePoint.prediction > 0.5 ? 1 : 0}
+              <div className="mt-1.5 bg-slate-800 rounded p-2 space-y-1.5">
+                {/* Prominent class + confidence pill */}
+                <div className={`text-center py-1.5 rounded font-bold text-sm ${
+                  inferencePoint.prediction > 0.5
+                    ? 'bg-orange-900/50 text-orange-300 border border-orange-700/40'
+                    : 'bg-blue-900/50 text-blue-300 border border-blue-700/40'
+                }`}>
+                  Class {inferencePoint.prediction > 0.5 ? 1 : 0}
+                  <span className="ml-2 font-normal text-xs opacity-80">
+                    {(Math.abs(inferencePoint.prediction - 0.5) * 2 * 100).toFixed(1)}% conf
+                  </span>
                 </div>
-                <div className="text-slate-300">p(1) = {inferencePoint.prediction.toFixed(4)}</div>
-                <div className="text-slate-400">
-                  conf = {(Math.abs(inferencePoint.prediction - 0.5)*2*100).toFixed(1)}%
+                {/* Raw values */}
+                <div className="text-xs font-mono text-slate-500 space-y-0.5">
+                  <div>x₁ = {inferencePoint.x.toFixed(3)}  x₂ = {inferencePoint.y.toFixed(3)}</div>
+                  <div>p(class=1) = <span className="text-slate-300">{inferencePoint.prediction.toFixed(5)}</span></div>
+                  <div className="text-slate-600 text-xs">conf = |p−0.5|×2 = {(Math.abs(inferencePoint.prediction - 0.5)*2).toFixed(4)}</div>
                 </div>
               </div>
             )}
@@ -1728,24 +1738,79 @@ export default function App() {
             </div>
           )}
 
+          {/* ── Explained Step Banner — visible during runExplainedEpoch ───────── */}
+          {stepModeStage !== 'idle' && (() => {
+            const stages = ['forward', 'loss', 'backward', 'update'];
+            const stageIdx = stages.indexOf(stepModeStage);
+            const col = {
+              forward:  { border: 'border-blue-500',    bg: 'bg-blue-950/60',    title: 'text-blue-300',    dot: 'bg-blue-400' },
+              loss:     { border: 'border-amber-500',   bg: 'bg-amber-950/60',   title: 'text-amber-300',   dot: 'bg-amber-400' },
+              backward: { border: 'border-violet-500',  bg: 'bg-violet-950/60',  title: 'text-violet-300',  dot: 'bg-violet-400' },
+              update:   { border: 'border-emerald-500', bg: 'bg-emerald-950/60', title: 'text-emerald-300', dot: 'bg-emerald-400' },
+            }[stepModeStage];
+            return (
+              <div className={`flex-shrink-0 border-l-4 ${col.border} ${col.bg} rounded-r-lg p-2.5 text-xs`}>
+                {/* Progress dots */}
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  {stages.map((s, i) => (
+                    <div key={s} className={`w-2 h-2 rounded-full transition-all ${
+                      s === stepModeStage ? `${col.dot} animate-pulse` :
+                      i < stageIdx       ? 'bg-slate-500' : 'bg-slate-700'
+                    }`} />
+                  ))}
+                  <span className="text-slate-500 ml-0.5 font-mono">Stage {stageIdx + 1} of 4</span>
+                </div>
+                {stepModeStage === 'forward' && (
+                  <div>
+                    <div className={`font-bold ${col.title} mb-0.5`}>
+                      → Forward Pass <span className="font-mono font-normal text-slate-400">input = [0, 0]</span>
+                    </div>
+                    <div className="text-slate-300">Each neuron computes <span className="font-mono text-blue-200">z = W·x + b</span> then <span className="font-mono text-blue-200">a = activation(z)</span>. Watch values light up left→right.</div>
+                    <div className="mt-1 font-mono text-blue-400">out = model([0,0])  →  p(class=1) shown on output neuron</div>
+                  </div>
+                )}
+                {stepModeStage === 'loss' && (
+                  <div>
+                    <div className={`font-bold ${col.title} mb-0.5`}>📊 Loss Calculation</div>
+                    <div className="text-slate-300">Binary Cross-Entropy penalizes wrong-confident predictions harshly. Lower = better fit to all 4 XOR samples.</div>
+                    <div className="mt-1 font-mono text-amber-400">
+                      L = −(1/4)·Σ[y·log(ŷ)+(1−y)·log(1−ŷ)] = <span className="text-amber-200 font-bold">{stepModeLoss?.toFixed(6)}</span>
+                    </div>
+                  </div>
+                )}
+                {stepModeStage === 'backward' && (
+                  <div>
+                    <div className={`font-bold ${col.title} mb-0.5`}>
+                      ← Backpropagation <span className="font-mono font-normal text-slate-400">computing ∂L/∂w</span>
+                    </div>
+                    <div className="text-slate-300">Chain rule flows right→left. Edge brightness = gradient magnitude. Violet pulse = active layer. Brighter edge = larger weight update coming.</div>
+                    <div className="mt-1 font-mono text-violet-400">δ[L]=ŷ−y · δ[l]=(Wᵀδ[l+1])⊙σ'(z) · ∂L/∂W=δ·aᵀ</div>
+                  </div>
+                )}
+                {stepModeStage === 'update' && (
+                  <div>
+                    <div className={`font-bold ${col.title} mb-0.5`}>↻ Weight Update Applied</div>
+                    <div className="text-slate-300">Every weight stepped opposite its gradient. Edges still show the gradients just applied. The boundary canvas redraws with new weights.</div>
+                    <div className="mt-1 font-mono text-emerald-400">W ← W − {learningRate.toFixed(3)}·∂L/∂W <span className="text-slate-600">(optimizer.step())</span></div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Network Graph */}
           <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-2 flex-shrink-0">
             <div className="flex items-center justify-between mb-1">
               <h2 className="text-xs font-semibold text-slate-300">Network</h2>
               <div className="flex items-center gap-2 text-xs">
-                {/* Stage indicator — shows while explained epoch is running */}
-                {stageInfo && (
-                  <span className={`font-mono font-bold animate-pulse ${stageInfo.cls}`}>
-                    {stageInfo.text}
-                  </span>
-                )}
-                {!stageInfo && animatingLayer >= 0 && (
+                {/* During standalone animations show layer indicator */}
+                {stepModeStage === 'idle' && animatingLayer >= 0 && (
                   <span className="text-blue-400 font-mono animate-pulse">→ layer {animatingLayer}</span>
                 )}
-                {!stageInfo && lastGradients && animatingLayer < 0 && (
-                  <span className="text-violet-400 font-mono text-xs">edges = ∂L/∂W</span>
+                {stepModeStage === 'idle' && lastGradients && animatingLayer < 0 && (
+                  <span className="text-violet-400 font-mono">edges = |∂L/∂w|</span>
                 )}
-                {/* Toggle gradient labels */}
+                {/* Toggle numeric gradient labels on edges */}
                 {lastGradients && (
                   <button
                     onClick={() => setShowGradientLabels(v => !v)}
@@ -1801,20 +1866,27 @@ export default function App() {
                   Initializing…
                 </div>
               )}
-              <div className="flex gap-3 mt-1 text-xs text-slate-500">
-                {!showConfidence && (
+              <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
+                {!showConfidence ? (
                   <>
-                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block"/>Class 0</span>
-                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block"/>Class 1</span>
+                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-blue-500 inline-block"/>Class 0</span>
+                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-orange-500 inline-block"/>Class 1</span>
+                    <span className="text-slate-700">· click = predict</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: '#1e293b', border: '1px solid #334155' }}/>
+                      boundary (uncertain)
+                    </span>
+                    <span className="text-slate-700">→</span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block"/>
+                      confident
+                    </span>
+                    <span className="text-slate-600 ml-auto">|p−0.5|×2</span>
                   </>
                 )}
-                {showConfidence && (
-                  <span className="flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"/>High conf
-                    <span className="w-2.5 h-2.5 rounded-full bg-slate-800 inline-block ml-1 border border-slate-600"/>Uncertain
-                  </span>
-                )}
-                <span className="text-slate-600">· click = infer</span>
               </div>
             </div>
 
