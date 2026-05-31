@@ -889,9 +889,12 @@ function ConceptCallout({ type, onDismiss }) {
 // =============================================================================
 // COMPONENT: PyTorchSidebar
 // =============================================================================
+// PyTorchSidebar must be used inside a flex-col container that gives it a
+// bounded height — otherwise overflow-y-auto has nothing to constrain against
+// and the <pre> expands to full content height, overflowing into sibling panels.
 function PyTorchSidebar({ layerSizes, hiddenActivationTypes }) {
   return (
-    <div className="bg-gray-950 rounded-lg border border-slate-700 p-3 flex-1 overflow-auto">
+    <div className="bg-gray-950 rounded-lg border border-slate-700 p-3 h-full overflow-y-auto">
       <div className="flex items-center gap-1.5 mb-2">
         {['bg-red-500','bg-yellow-500','bg-green-500'].map((c,i) => (
           <div key={i} className={`w-2.5 h-2.5 rounded-full ${c}`} />
@@ -1426,45 +1429,63 @@ export default function App() {
         {/* ═══════════════════════════════════════════════════════════════════
             RIGHT PANEL — PyTorch + XOR Verify + Math Audit
         ═══════════════════════════════════════════════════════════════════ */}
-        <div className="w-80 border-l border-slate-700 p-3 flex flex-col gap-3 overflow-y-auto flex-shrink-0">
-          {/* PyTorch code */}
-          <div className="flex-shrink-0" style={{ height: '280px' }}>
-            <div className="flex items-center justify-between mb-1">
+        {/*
+          Right panel: flex-col with overflow-hidden on the outer div.
+          Each section manages its own height so nothing bleeds into siblings.
+          - PyTorch: fixed 240px, flex-col so PyTorchSidebar fills remaining
+            height and scrolls internally (h-full overflow-y-auto).
+          - XOR Verify: flex-shrink-0, natural height (4-row table, always fits).
+          - Math Audit: flex-1 min-h-0 overflow-y-auto — grows to fill what's
+            left and scrolls when the z/a listing is taller than the panel.
+          - Params: flex-shrink-0, small fixed block at the bottom.
+        */}
+        <div className="w-80 border-l border-slate-700 flex flex-col overflow-hidden flex-shrink-0">
+
+          {/* ── PyTorch code — 240px tall, scrollable internally ─────────── */}
+          <div className="flex flex-col flex-shrink-0 p-3 border-b border-slate-700"
+               style={{ height: '240px' }}>
+            <div className="flex items-center justify-between mb-1.5 flex-shrink-0">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">PyTorch Equivalent</h2>
               <span className="text-xs text-slate-600">explanatory only</span>
             </div>
-            <PyTorchSidebar layerSizes={layerSizes} hiddenActivationTypes={activationTypes} />
+            {/* flex-1 min-h-0: fills remaining height of the 240px parent so
+                PyTorchSidebar's h-full + overflow-y-auto actually works */}
+            <div className="flex-1 min-h-0">
+              <PyTorchSidebar layerSizes={layerSizes} hiddenActivationTypes={activationTypes} />
+            </div>
           </div>
 
-          <div className="border-t border-slate-700" />
-
-          {/* XOR Verification table */}
-          <div className="flex-shrink-0 bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
-            <XorVerifyPanel xorResults={xorResults} />
+          {/* ── XOR Verification table — natural height, never overflows ─── */}
+          <div className="flex-shrink-0 p-3 border-b border-slate-700">
+            <div className="bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
+              <XorVerifyPanel xorResults={xorResults} />
+            </div>
           </div>
 
-          <div className="border-t border-slate-700" />
-
-          {/* Math Audit Panel */}
-          <div className="flex-shrink-0 bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
-            <MathAuditPanel
-              xorResults={xorResults}
-              hiddenActivationTypes={activationTypes}
-              layerSizes={layerSizes}
-            />
+          {/* ── Math Audit — fills remaining height, scrolls if needed ───── */}
+          <div className="flex-1 min-h-0 overflow-y-auto p-3 border-b border-slate-700">
+            <div className="bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
+              <MathAuditPanel
+                xorResults={xorResults}
+                hiddenActivationTypes={activationTypes}
+                layerSizes={layerSizes}
+              />
+            </div>
           </div>
 
-          {/* Parameter count */}
+          {/* ── Parameter count — fixed footer ───────────────────────────── */}
           {network && (
-            <div className="flex-shrink-0 bg-slate-800 rounded p-2 text-xs font-mono border border-slate-700">
-              <div className="text-slate-500 mb-1">Parameters</div>
-              {network.weights.map((W, l) => (
-                <div key={l} className="text-slate-400">
-                  L{l+1}: {W[0].length}×{W.length}+{W.length}b = {W.length*W[0].length+W.length}
+            <div className="flex-shrink-0 p-3">
+              <div className="bg-slate-800 rounded p-2 text-xs font-mono border border-slate-700">
+                <div className="text-slate-500 mb-1">Parameters</div>
+                {network.weights.map((W, l) => (
+                  <div key={l} className="text-slate-400">
+                    L{l+1}: {W[0].length}×{W.length}+{W.length}b = {W.length*W[0].length+W.length}
+                  </div>
+                ))}
+                <div className="text-blue-400 mt-0.5">
+                  Total: {network.weights.reduce((s,W) => s+W.length*W[0].length+W.length, 0)}
                 </div>
-              ))}
-              <div className="text-blue-400 mt-0.5">
-                Total: {network.weights.reduce((s,W) => s+W.length*W[0].length+W.length, 0)}
               </div>
             </div>
           )}
