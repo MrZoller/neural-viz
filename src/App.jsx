@@ -669,6 +669,17 @@ function confidenceColor(prob) {
   return `rgb(${r},${g},${b})`;
 }
 
+// Weight value → cool (negative) or warm (positive), intensity proportional to magnitude.
+// maxMag is the largest |weight| in the layer (for per-layer normalization).
+function weightColor(v, maxMag) {
+  if (maxMag < 1e-8) return 'rgba(71,85,105,0.2)';
+  const t = Math.max(-1, Math.min(1, v / maxMag));
+  const a = (0.12 + Math.abs(t) * 0.78).toFixed(2);
+  return t >= 0
+    ? `rgba(245,158,11,${a})`   // amber — positive weight
+    : `rgba(59,130,246,${a})`;  // blue  — negative weight
+}
+
 // =============================================================================
 // SECTION 12 — NETWORK GRAPH LAYOUT
 // =============================================================================
@@ -1360,6 +1371,262 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGr
 }
 
 // =============================================================================
+// COMPONENT: WeightsInspector
+//
+// Shows every layer's weight matrix and bias vector with amber/blue color coding
+// (positive = amber, negative = blue, brightness = relative magnitude).
+// Also provides JSON export of all parameters (copy + download).
+// =============================================================================
+function WeightsInspector({ network, layerSizes, hiddenActivationTypes, epoch, trainingStatus, latestLoss, xorResults }) {
+  const [llmExpanded, setLlmExpanded] = useState(false);
+  const [ptExpanded,  setPtExpanded]  = useState(false);
+  const [copyDone,    setCopyDone]    = useState(false);
+
+  if (!network) {
+    return (
+      <div className="text-slate-600 text-xs text-center py-4 italic">
+        Initialize network to inspect parameters.
+      </div>
+    );
+  }
+
+  const { weights, biases } = network;
+  const layerMaxMag = weights.map(W =>
+    Math.max(...W.map(row => Math.max(...row.map(Math.abs))))
+  );
+
+  const buildExport = () => {
+    const layers = weights.map((W, l) => {
+      const inSize  = layerSizes[l];
+      const outSize = layerSizes[l + 1];
+      const isOutput = l === weights.length - 1;
+      return {
+        name:            isOutput ? 'output' : `hidden_${l + 1}`,
+        index:           l,
+        activation:      isOutput ? 'sigmoid' : (hiddenActivationTypes[l] || 'relu'),
+        weight_shape:    [outSize, inSize],
+        bias_shape:      [outSize],
+        weight:          W,
+        bias:            biases[l],
+        parameter_count: outSize * inSize + outSize,
+      };
+    });
+    const xorSolved = xorResults ? xorResults.every(r => Math.round(r.prediction) === r.label) : false;
+    return {
+      exported_at:      new Date().toISOString(),
+      source:           'Neural Network Learning Tool — neural-viz',
+      architecture: {
+        layers:             layerSizes,
+        hidden_activations: hiddenActivationTypes,
+        output_activation:  'sigmoid',
+      },
+      training: { epoch, loss: latestLoss, status: trainingStatus, xor_solved: xorSolved },
+      layers,
+      total_parameters: layers.reduce((s, l) => s + l.parameter_count, 0),
+    };
+  };
+
+  const handleCopyJSON = () => {
+    const json = JSON.stringify(buildExport(), null, 2);
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = json; ta.style.cssText = 'position:fixed;opacity:0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(json).catch(fallback);
+    } else { fallback(); }
+    setCopyDone(true);
+    setTimeout(() => setCopyDone(false), 2000);
+  };
+
+  const handleDownloadJSON = () => {
+    const blob = new Blob([JSON.stringify(buildExport(), null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'neural-viz-params.json'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const ptSnippet =
+`import json, torch, torch.nn as nn
+
+with open('neural-viz-params.json') as f:
+    p = json.load(f)
+
+linears = [m for m in model.modules() if isinstance(m, nn.Linear)]
+for i, ldata in enumerate(p['layers']):
+    with torch.no_grad():
+        linears[i].weight.copy_(
+            torch.tensor(ldata['weight'], dtype=torch.float32))
+        linears[i].bias.copy_(
+            torch.tensor(ldata['bias'], dtype=torch.float32))
+print("Weights loaded from neural-viz-params.json")`;
+
+  return (
+    <div className="space-y-3">
+      {/* Educational callout */}
+      <div className="bg-blue-900/20 border border-blue-800/40 rounded p-2 text-xs text-blue-200/80 leading-relaxed">
+        <p className="font-semibold text-blue-300 mb-1">What these numbers mean</p>
+        <p>Each <span className="text-amber-300">weight</span> is a learned multiplier on an incoming signal. Large positive → amplifies toward class 1; large negative → suppresses it. <span className="text-slate-400">Biases shift the activation threshold independently of inputs.</span></p>
+        <p className="mt-1"><span className="text-amber-400 font-semibold">Amber = positive</span> · <span className="text-blue-400 font-semibold">blue = negative</span> · brightness = magnitude relative to layer max.</p>
+      </div>
+
+      {/* Per-layer weight matrices + bias vectors */}
+      {weights.map((W, l) => {
+        const inSize   = layerSizes[l];
+        const outSize  = layerSizes[l + 1];
+        const isOutput = l === weights.length - 1;
+        const actName  = isOutput ? 'Sigmoid' : (ACTIVATIONS[hiddenActivationTypes[l]]?.label || hiddenActivationTypes[l]);
+        const maxMag   = layerMaxMag[l];
+
+        return (
+          <div key={l} className="bg-slate-800/50 border border-slate-700 rounded p-2">
+            <div className="flex items-baseline justify-between mb-1.5">
+              <span className="text-xs font-semibold text-slate-300">
+                {isOutput ? 'Output layer' : `Hidden layer ${l + 1}`}
+              </span>
+              <span className="text-xs font-mono text-slate-500">
+                {inSize}→{outSize} · <span className="text-slate-400">{actName}</span>
+              </span>
+            </div>
+
+            {/* Weight matrix */}
+            <div className="text-slate-500 mb-1 font-mono" style={{ fontSize: '9px' }}>
+              W [{outSize}×{inSize}]<span className="text-slate-700 ml-1">rows=out neuron, cols=in neuron</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="border-collapse">
+                <thead>
+                  <tr>
+                    <td className="pr-1 text-slate-700" style={{ fontSize: '8px', fontFamily: 'monospace' }}>↓out\in→</td>
+                    {Array.from({ length: inSize }, (_, j) => (
+                      <td key={j} className="text-center text-slate-600 pb-0.5 px-0.5"
+                          style={{ fontSize: '8px', fontFamily: 'monospace', minWidth: '38px' }}>
+                        x{j}
+                      </td>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {W.map((row, i) => (
+                    <tr key={i}>
+                      <td className="pr-1 text-slate-600 text-right"
+                          style={{ fontSize: '8px', fontFamily: 'monospace' }}>n{i}</td>
+                      {row.map((v, j) => (
+                        <td key={j} className="px-0.5 py-px">
+                          <div className="text-center rounded text-slate-100 leading-tight"
+                               style={{
+                                 background: weightColor(v, maxMag),
+                                 padding: '2px 3px',
+                                 fontSize: '9px',
+                                 fontFamily: 'monospace',
+                                 minWidth: '36px',
+                               }}>
+                            {v >= 0 ? '+' : ''}{v.toFixed(3)}
+                          </div>
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Bias vector */}
+            <div className="mt-1.5">
+              <div className="text-slate-500 mb-0.5 font-mono" style={{ fontSize: '9px' }}>
+                b [{outSize}]
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {biases[l].map((v, i) => (
+                  <div key={i} className="text-center rounded text-slate-100 leading-tight"
+                       style={{
+                         background: weightColor(v, maxMag),
+                         padding: '2px 4px',
+                         fontSize: '9px',
+                         fontFamily: 'monospace',
+                         minWidth: '36px',
+                       }}>
+                    {v >= 0 ? '+' : ''}{v.toFixed(3)}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="text-slate-700 mt-1 font-mono" style={{ fontSize: '8px' }}>
+              max |w| = {maxMag.toFixed(4)}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* LLM analogy (collapsible) */}
+      <div className="border border-slate-700 rounded overflow-hidden">
+        <button
+          onClick={() => setLlmExpanded(v => !v)}
+          className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition-colors">
+          <span className="font-semibold">LLM analogy</span>
+          <span className="font-mono text-slate-600">{llmExpanded ? '▲' : '▼'}</span>
+        </button>
+        {llmExpanded && (
+          <div className="bg-slate-800/40 border-t border-slate-700 px-2.5 py-2 text-xs text-slate-300 leading-relaxed space-y-1.5">
+            <p>GPT-4 has <span className="text-amber-300 font-semibold">~1.8 trillion parameters</span> — the same kind of numbers you see here, just at vastly larger scale.</p>
+            <p>In a transformer, <span className="text-blue-300">attention weight matrices</span> learn which tokens are relevant to each other — much like your hidden-layer weights learn which input features matter for XOR.</p>
+            <p>When you download a model checkpoint (e.g. <code className="text-emerald-400 bg-slate-900/60 rounded px-0.5">llama-3.safetensors</code>), you're downloading exactly this: trained float matrices. The architecture is fixed; the <em>values</em> are what learning produces.</p>
+            <p className="text-slate-500">
+              Your net: {network.weights.reduce((s, W) => s + W.length * W[0].length + W.length, 0)} params.
+              GPT-4: ~1.8T. Same idea, ~10¹² × larger.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Parameter JSON export */}
+      <div>
+        <div className="text-xs text-slate-500 mb-1.5">Export Parameters (JSON)</div>
+        <div className="flex gap-1.5">
+          <button onClick={handleCopyJSON}
+            className={`flex-1 py-1 rounded text-xs border transition-colors ${
+              copyDone
+                ? 'bg-emerald-900/40 text-emerald-400 border-emerald-700/50'
+                : 'bg-slate-700 hover:bg-slate-600 text-slate-300 border-slate-600'
+            }`}>
+            {copyDone ? '✓ Copied!' : '📋 Copy JSON'}
+          </button>
+          <button onClick={handleDownloadJSON}
+            className="flex-1 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 border border-slate-600 transition-colors">
+            ⬇ Download JSON
+          </button>
+        </div>
+        <div className="text-slate-700 mt-1 font-mono" style={{ fontSize: '9px' }}>
+          neural-viz-params.json · weights, biases, arch &amp; training state
+        </div>
+      </div>
+
+      {/* PyTorch weight-loading snippet (collapsible) */}
+      <div className="border border-slate-700 rounded overflow-hidden">
+        <button
+          onClick={() => setPtExpanded(v => !v)}
+          className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition-colors">
+          <span className="font-mono">PyTorch: load weights</span>
+          <span className="font-mono text-slate-600">{ptExpanded ? '▲' : '▼'}</span>
+        </button>
+        {ptExpanded && (
+          <div className="bg-gray-950 border-t border-slate-800 overflow-y-auto" style={{ maxHeight: '180px' }}>
+            <pre className="text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap p-2.5">
+              {ptSnippet}
+            </pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
 // COMPONENT: TrainingStatusBar
 // =============================================================================
 function TrainingStatusBar({ status, epoch, loss, bestLoss, epochsSinceImprove, stopReason, maxEpochs }) {
@@ -1598,6 +1865,7 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate }) {
         {/* Weights-not-exported notice */}
         <div className="border-t border-slate-800 pt-1 mt-0.5 text-slate-600 leading-tight">
           Exported code reinitializes weights randomly — architecture matches, values don't.
+          To export actual trained values, use the <span className="text-amber-500/80">Weights</span> tab.
         </div>
       </div>
 
@@ -1679,7 +1947,7 @@ export default function App() {
   // ── Phase 2: View options ──────────────────────────────────────────────────
   const [showConfidence,     setShowConfidence]     = useState(false); // confidence vs class boundary
   const [showGradientLabels, setShowGradientLabels] = useState(true);  // numeric ∂L/∂W on edges
-  const [rightPanelTab,      setRightPanelTab]      = useState('audit'); // 'audit' | 'gradcheck'
+  const [rightPanelTab,      setRightPanelTab]      = useState('audit'); // 'audit' | 'gradcheck' | 'weights'
 
   // ── Animation ─────────────────────────────────────────────────────────────
   const [animatingLayer,     setAnimatingLayer]     = useState(-1);
@@ -2593,7 +2861,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* ── Math Audit / Gradient Check — tabbed, fills remaining height ── */}
+          {/* ── Math Audit / Gradient Check / Weights — tabbed, fills remaining height ── */}
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden border-b border-slate-700">
             {/* Tab switcher */}
             <div className="flex flex-shrink-0 border-b border-slate-700">
@@ -2615,25 +2883,46 @@ export default function App() {
                 }`}>
                 ∂w Check
               </button>
+              <button
+                onClick={() => setRightPanelTab('weights')}
+                className={`flex-1 text-xs py-1.5 font-medium transition-colors ${
+                  rightPanelTab === 'weights'
+                    ? 'text-amber-400 bg-slate-800/50 border-b-2 border-amber-500'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}>
+                Weights
+              </button>
             </div>
             {/* Tab content */}
             <div className="flex-1 min-h-0 overflow-y-auto p-3">
-              <div className="bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
-                {rightPanelTab === 'audit' ? (
-                  <MathAuditPanel
-                    xorResults={xorResults}
-                    hiddenActivationTypes={activationTypes}
-                    layerSizes={layerSizes}
-                  />
-                ) : (
-                  <GradientCheckPanel
-                    network={network}
-                    hiddenActivationTypes={activationTypes}
-                    layerSizes={layerSizes}
-                    lastGradients={lastGradients}
-                  />
-                )}
-              </div>
+              {rightPanelTab === 'weights' ? (
+                <WeightsInspector
+                  network={network}
+                  layerSizes={layerSizes}
+                  hiddenActivationTypes={activationTypes}
+                  epoch={epoch}
+                  trainingStatus={trainingStatus}
+                  latestLoss={latestLoss}
+                  xorResults={xorResults}
+                />
+              ) : (
+                <div className="bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
+                  {rightPanelTab === 'audit' ? (
+                    <MathAuditPanel
+                      xorResults={xorResults}
+                      hiddenActivationTypes={activationTypes}
+                      layerSizes={layerSizes}
+                    />
+                  ) : (
+                    <GradientCheckPanel
+                      network={network}
+                      hiddenActivationTypes={activationTypes}
+                      layerSizes={layerSizes}
+                      lastGradients={lastGradients}
+                    />
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
