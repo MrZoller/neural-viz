@@ -384,6 +384,81 @@ function checkConvergence(loss, xorResults, consecutiveCorrect) {
 }
 
 // =============================================================================
+// SECTION 15 — GRADIENT CHECK  (finite-difference verification)
+//
+// Verifies that the backprop gradient ∂L/∂w for a single weight matches the
+// numerical estimate computed via the symmetric (centered) finite-difference:
+//
+//   ∂L/∂w ≈ [L(w + ε) − L(w − ε)] / (2ε)      O(ε²) truncation error
+//
+// This is the standard numerical gradient check used to validate autograd
+// implementations. If the analytical and numerical gradients agree to within
+// ~1e-4 relative error, the backprop computation is almost certainly correct.
+//
+// ε = 1e-4 balances two opposing concerns:
+//   • Too large → the linear approximation breaks down (quadratic error term)
+//   • Too small → catastrophic cancellation in float64 (significant bits lost
+//     when subtracting nearly-equal L+ and L−)
+// For float64 with double-precision loss values, ε = 1e-4 to 1e-5 is the
+// standard sweet spot.
+//
+// Gradients are averaged over all 4 XOR samples (full-batch), matching the
+// convention used by trainOneEpoch and runExplainedEpoch.
+//
+// PyTorch equivalent: torch.autograd.gradcheck(model, inputs, eps=1e-4)
+// =============================================================================
+function runGradientCheck(weights, biases, hiddenActivationTypes, l, j, k, epsilon = 1e-4) {
+  const N = XOR_DATA.length;
+  const L = weights.length;
+
+  // ① Analytical gradient — backprop averaged over all 4 XOR samples.
+  //    This is the exact same computation used during training; we're just
+  //    isolating one scalar entry dWeights[l][j][k].
+  let totalDW = 0;
+  for (const { input, label } of XOR_DATA) {
+    const { activations, preActivations } = forwardPass(
+      input, weights, biases, hiddenActivationTypes
+    );
+    const { dWeights } = backprop(
+      [label], activations, preActivations, weights, hiddenActivationTypes
+    );
+    totalDW += dWeights[l][j][k];
+  }
+  const backpropGrad = totalDW / N;
+
+  // ② Numerical gradient — perturb only W[l][j][k] by ±ε, recompute full loss.
+  const perturbed = (sign) =>
+    weights.map((W, li) =>
+      W.map((row, ji) =>
+        row.map((w, ki) => (li === l && ji === j && ki === k) ? w + sign * epsilon : w)
+      )
+    );
+
+  const evalLoss = (perturbedWeights) => {
+    const preds = XOR_DATA.map(({ input }) => {
+      const { activations } = forwardPass(input, perturbedWeights, biases, hiddenActivationTypes);
+      return activations[L];
+    });
+    return computeLoss(preds, XOR_DATA.map(d => d.label));
+  };
+
+  const lossPlus  = evalLoss(perturbed(+1));
+  const lossMinus = evalLoss(perturbed(-1));
+  const fdGrad    = (lossPlus - lossMinus) / (2 * epsilon);
+
+  const absError = Math.abs(backpropGrad - fdGrad);
+  // Relative error normalised by the sum of magnitudes (avoids div-by-zero
+  // when both gradients are essentially zero — which is correct agreement).
+  const relError = absError / Math.max(Math.abs(backpropGrad) + Math.abs(fdGrad), 1e-10);
+
+  return {
+    backpropGrad, fdGrad, absError, relError,
+    lossPlus, lossMinus, epsilon,
+    currentWeight: weights[l][j][k],
+  };
+}
+
+// =============================================================================
 // COMPONENT: NetworkGraph
 //
 // Props:
@@ -753,6 +828,154 @@ function MathAuditPanel({ xorResults, hiddenActivationTypes, layerSizes }) {
 }
 
 // =============================================================================
+// COMPONENT: GradientCheckPanel
+//
+// Lets the user select any single weight W[l][j][k] and verify that the
+// backprop gradient matches the centered finite-difference approximation.
+// Shows both values side by side with the absolute and relative error so the
+// user can see for themselves that the math is correct.
+// =============================================================================
+function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes }) {
+  const [layerIdx, setLayerIdx] = useState(0);
+  const [rowIdx,   setRowIdx]   = useState(0);
+  const [colIdx,   setColIdx]   = useState(0);
+  const [result,   setResult]   = useState(null);
+
+  if (!network) return (
+    <div className="text-xs text-slate-600 italic">Initialize or train the network first</div>
+  );
+
+  // Clamp j/k indices whenever the layer selector changes
+  const maxRow = (network.weights[layerIdx]?.length       ?? 1) - 1;
+  const maxCol = (network.weights[layerIdx]?.[0]?.length  ?? 1) - 1;
+  const safeRow = Math.min(rowIdx, maxRow);
+  const safeCol = Math.min(colIdx, maxCol);
+
+  const currentW = network.weights[layerIdx]?.[safeRow]?.[safeCol] ?? 0;
+
+  const handleLayerChange = (v) => { setLayerIdx(+v); setResult(null); };
+  const handleRowChange   = (v) => { setRowIdx(+v);   setResult(null); };
+  const handleColChange   = (v) => { setColIdx(+v);   setResult(null); };
+
+  const handleRun = () => {
+    const r = runGradientCheck(
+      network.weights, network.biases, hiddenActivationTypes,
+      layerIdx, safeRow, safeCol
+    );
+    setResult(r);
+  };
+
+  // Quality tier based on relative error
+  const quality = result
+    ? result.relError < 1e-4
+      ? { text: '✓ Excellent match  (rel err < 1e-4)', cls: 'text-emerald-400' }
+      : result.relError < 1e-2
+      ? { text: '~ Acceptable  (rel err < 1e-2)', cls: 'text-amber-400' }
+      : { text: '⚠ Mismatch — possible backprop bug', cls: 'text-red-400' }
+    : null;
+
+  return (
+    <div>
+      <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+        Gradient Check
+      </div>
+
+      {/* Weight selector ─────────────────────────────────────────────────── */}
+      <div className="text-xs font-mono bg-slate-900/60 rounded p-2 space-y-1.5 mb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-slate-500 w-24 shrink-0">Layer W[l]</span>
+          <select value={layerIdx} onChange={e => handleLayerChange(e.target.value)}
+            className="bg-slate-800 border border-slate-600 rounded text-white text-xs p-0.5 flex-1">
+            {network.weights.map((_, li) => (
+              <option key={li} value={li}>
+                W[{li}]  {layerSizes[li]}→{layerSizes[li + 1]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-slate-500 w-24 shrink-0">To neuron j</span>
+          <select value={safeRow} onChange={e => handleRowChange(e.target.value)}
+            className="bg-slate-800 border border-slate-600 rounded text-white text-xs p-0.5 flex-1">
+            {Array.from({ length: maxRow + 1 }, (_, i) => (
+              <option key={i} value={i}>{i}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-slate-500 w-24 shrink-0">From neuron k</span>
+          <select value={safeCol} onChange={e => handleColChange(e.target.value)}
+            className="bg-slate-800 border border-slate-600 rounded text-white text-xs p-0.5 flex-1">
+            {Array.from({ length: maxCol + 1 }, (_, i) => (
+              <option key={i} value={i}>{i}</option>
+            ))}
+          </select>
+        </div>
+        <div className="text-slate-600 border-t border-slate-800 pt-1.5 text-xs">
+          W[{layerIdx}][{safeRow}][{safeCol}] ={' '}
+          <span className="text-slate-300">{currentW.toFixed(6)}</span>
+        </div>
+      </div>
+
+      <button onClick={handleRun}
+        className="w-full py-1 rounded text-xs bg-indigo-900/60 hover:bg-indigo-800 text-indigo-300 border border-indigo-700/50 mb-3">
+        Run Check  (ε = 1e-4)
+      </button>
+
+      {/* Results ─────────────────────────────────────────────────────────── */}
+      {result && (
+        <div className="text-xs font-mono bg-slate-900/60 rounded p-2 space-y-1">
+          {/* Intermediate loss values so the user can see the raw computation */}
+          <div className="text-slate-500 border-b border-slate-800 pb-1 mb-1">
+            ε = {result.epsilon}  ·  full-batch (N = 4 XOR samples)
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-500">Loss(w + ε)</span>
+            <span className="text-slate-300">{result.lossPlus.toFixed(8)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-500">Loss(w − ε)</span>
+            <span className="text-slate-300">{result.lossMinus.toFixed(8)}</span>
+          </div>
+
+          {/* The two gradient estimates side by side */}
+          <div className="border-t border-slate-800 pt-1 mt-0.5 space-y-1">
+            <div className="flex justify-between">
+              <span className="text-violet-400">Backprop  ∂L/∂w</span>
+              <span className="text-violet-300 font-bold">{result.backpropGrad >= 0 ? ' ' : ''}{result.backpropGrad.toFixed(8)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-blue-400">Finite diff  ∂L/∂w</span>
+              <span className="text-blue-300 font-bold">{result.fdGrad >= 0 ? ' ' : ''}{result.fdGrad.toFixed(8)}</span>
+            </div>
+          </div>
+
+          {/* Error metrics */}
+          <div className="border-t border-slate-800 pt-1 mt-0.5 space-y-1">
+            <div className="flex justify-between">
+              <span className="text-slate-400">|error|  (absolute)</span>
+              <span className="text-slate-200">{result.absError.toExponential(3)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">rel error</span>
+              <span className="text-slate-200">{result.relError.toExponential(3)}</span>
+            </div>
+          </div>
+
+          <div className={`border-t border-slate-800 pt-1.5 font-bold ${quality.cls}`}>
+            {quality.text}
+          </div>
+
+          <div className="text-slate-600 text-xs pt-0.5">
+            Relative error = |err| / (|backprop| + |fd|)
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
 // COMPONENT: TrainingStatusBar
 // =============================================================================
 function TrainingStatusBar({ status, epoch, loss, bestLoss, epochsSinceImprove, stopReason, maxEpochs }) {
@@ -913,6 +1136,7 @@ export default function App() {
   // ── Phase 2: View options ──────────────────────────────────────────────────
   const [showConfidence,     setShowConfidence]     = useState(false); // confidence vs class boundary
   const [showGradientLabels, setShowGradientLabels] = useState(true);  // numeric ∂L/∂W on edges
+  const [rightPanelTab,      setRightPanelTab]      = useState('audit'); // 'audit' | 'gradcheck'
 
   // ── Animation ─────────────────────────────────────────────────────────────
   const [animatingLayer,     setAnimatingLayer]     = useState(-1);
@@ -1623,13 +1847,46 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto p-3 border-b border-slate-700">
-            <div className="bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
-              <MathAuditPanel
-                xorResults={xorResults}
-                hiddenActivationTypes={activationTypes}
-                layerSizes={layerSizes}
-              />
+          {/* ── Math Audit / Gradient Check — tabbed, fills remaining height ── */}
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden border-b border-slate-700">
+            {/* Tab switcher */}
+            <div className="flex flex-shrink-0 border-b border-slate-700">
+              <button
+                onClick={() => setRightPanelTab('audit')}
+                className={`flex-1 text-xs py-1.5 font-medium transition-colors ${
+                  rightPanelTab === 'audit'
+                    ? 'text-blue-400 bg-slate-800/50 border-b-2 border-blue-500'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}>
+                Math Audit
+              </button>
+              <button
+                onClick={() => setRightPanelTab('gradcheck')}
+                className={`flex-1 text-xs py-1.5 font-medium transition-colors ${
+                  rightPanelTab === 'gradcheck'
+                    ? 'text-indigo-400 bg-slate-800/50 border-b-2 border-indigo-500'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}>
+                ∂w Check
+              </button>
+            </div>
+            {/* Tab content */}
+            <div className="flex-1 min-h-0 overflow-y-auto p-3">
+              <div className="bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
+                {rightPanelTab === 'audit' ? (
+                  <MathAuditPanel
+                    xorResults={xorResults}
+                    hiddenActivationTypes={activationTypes}
+                    layerSizes={layerSizes}
+                  />
+                ) : (
+                  <GradientCheckPanel
+                    network={network}
+                    hiddenActivationTypes={activationTypes}
+                    layerSizes={layerSizes}
+                  />
+                )}
+              </div>
             </div>
           </div>
 
