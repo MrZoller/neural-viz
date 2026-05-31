@@ -403,7 +403,7 @@ function checkConvergence(loss, xorResults, consecutiveCorrect) {
 // standard sweet spot.
 //
 // Gradients are averaged over all 4 XOR samples (full-batch), matching the
-// convention used by trainOneEpoch and runExplainedEpoch.
+// convention used by trainOneEpoch and startExplainedEpoch.
 //
 // PyTorch equivalent: torch.autograd.gradcheck(model, inputs, eps=1e-4)
 // =============================================================================
@@ -1169,8 +1169,12 @@ export default function App() {
   //   'loss'     — Stage 2: loss value being shown
   //   'backward' — Stage 3: backprop gradients animating right→left
   //   'update'   — Stage 4: weight update being applied
-  const [stepModeStage, setStepModeStage] = useState('idle');
-  const [stepModeLoss,  setStepModeLoss]  = useState(null); // pre-update loss for Stage 2 display
+  const [stepModeStage,         setStepModeStage]         = useState('idle');
+  const [stepModeLoss,          setStepModeLoss]          = useState(null);  // pre-update loss for Stage 2 display
+  const [stepModeResult,        setStepModeResult]        = useState(null);  // pre-computed epoch data
+  const [stepModeLayerAnimDone, setStepModeLayerAnimDone] = useState(false); // true once per-layer anim finishes
+  const [stepModeAutoPlay,      setStepModeAutoPlay]      = useState(false); // auto-advance stages
+  const [stepModeAutoSpeed,     setStepModeAutoSpeed]     = useState(4);     // seconds between auto-advances
 
   // ── Phase 2: View options ──────────────────────────────────────────────────
   const [showConfidence,     setShowConfidence]     = useState(false); // confidence vs class boundary
@@ -1200,6 +1204,8 @@ export default function App() {
   const dismissedCalloutsRef  = useRef(new Set());
   const trainingLoopRef       = useRef(null);
   const isAnimatingRef        = useRef(false); // prevents concurrent animation runs
+  const stepModeAutoTimerRef  = useRef(null);  // setTimeout ID for explained-step auto-play
+  const stepModeAppliedRef    = useRef(false); // prevents double weight-apply on revisit of update stage
 
   useEffect(() => { dismissedCalloutsRef.current = dismissedCallouts; }, [dismissedCallouts]);
   useEffect(() => { maxEpochsRef.current = maxEpochs; }, [maxEpochs]);
@@ -1235,6 +1241,14 @@ export default function App() {
     setCallouts(new Set());
     setStepModeStage('idle');
     setStepModeLoss(null);
+    setStepModeResult(null);
+    setStepModeLayerAnimDone(false);
+    setStepModeAutoPlay(false);
+    stepModeAppliedRef.current = false;
+    if (stepModeAutoTimerRef.current) {
+      clearTimeout(stepModeAutoTimerRef.current);
+      stepModeAutoTimerRef.current = null;
+    }
   }, [layerSizes.join(',')]);
 
   useEffect(() => { initializeNetwork(); }, []);
@@ -1412,116 +1426,210 @@ export default function App() {
     isAnimatingRef.current = false;
   }, [activationTypes, layerSizes.length, isTraining]);
 
-  // ── Explained epoch — 4-stage animation ───────────────────────────────────
-  // This is the Phase 2 "Train 1 Epoch with Explanation" feature.
-  // It pre-computes one full training epoch (trainOneEpoch), then walks through
-  // the result in four animated stages so the user can see each step:
+  // ── Explained epoch — user-paced 4-stage mode ────────────────────────────
+  // startExplainedEpoch pre-computes one training epoch and enters step mode.
+  // The user navigates Forward → Loss → Backward → Update via Next/Prev/Done
+  // buttons in the StepBanner. Auto-play can advance stages automatically.
   //
-  //   Stage 1 (forward):  activations flow left→right through the network
-  //   Stage 2 (loss):     the BCE loss value is shown prominently
-  //   Stage 3 (backward): gradient magnitudes appear on edges, right→left highlight
-  //   Stage 4 (update):   new weights are applied and epoch counter increments
+  //   Stage 1 (forward):  activations animate left→right
+  //   Stage 2 (loss):     BCE loss shown; forward activations remain visible
+  //   Stage 3 (backward): gradient magnitudes on edges, right→left highlight
+  //   Stage 4 (update):   weights applied once (idempotent), epoch increments
   //
-  // PyTorch equivalent of the 4 stages:
-  //   optimizer.zero_grad()   → Stage 1 setup
+  // PyTorch equivalent:
   //   out = model(X)          → Stage 1
   //   loss = criterion(out,y) → Stage 2
   //   loss.backward()         → Stage 3
   //   optimizer.step()        → Stage 4
-  const runExplainedEpoch = useCallback(async () => {
+  const startExplainedEpoch = useCallback(() => {
     if (!networkRef.current || isTraining || isAnimatingRef.current) return;
     if (stepModeStage !== 'idle') return;
+    const { weights, biases } = networkRef.current;
+    const result = trainOneEpoch(weights, biases, activationTypes, learningRate);
+    stepModeAppliedRef.current = false;
+    setStepModeResult(result);
+    setStepModeLoss(result.loss);
+    setStepModeAutoPlay(false);
+    setStepModeLayerAnimDone(false);
+    setStepModeStage('forward');
+    setTrainingStatus('stepping');
+  }, [activationTypes, learningRate, isTraining, stepModeStage]);
+
+  // Per-stage layer animation: fires on every stage transition.
+  // Uses a cancellation token so navigating away stops the in-flight animation.
+  useEffect(() => {
+    if (stepModeStage === 'idle' || !stepModeResult) return;
+    let cancelled = false;
+    const delay = ms => new Promise(r => setTimeout(r, ms));
+
+    setStepModeLayerAnimDone(false);
+    setAnimatingLayer(-1);
     isAnimatingRef.current = true;
 
-    const { weights, biases } = networkRef.current;
+    const run = async () => {
+      if (stepModeStage === 'forward') {
+        const fwdData = stepModeResult.allForwardData[0];
+        for (let l = 0; l < layerSizes.length; l++) {
+          if (cancelled) return;
+          setAnimatingLayer(l);
+          setForwardPassDisplay({
+            activations:    fwdData.activations.slice(0, l + 1),
+            preActivations: fwdData.preActivations,
+          });
+          await delay(300);
+        }
+        if (!cancelled) {
+          setAnimatingLayer(-1);
+          setForwardPassDisplay({
+            activations:    fwdData.activations,
+            preActivations: fwdData.preActivations,
+          });
+        }
+      } else if (stepModeStage === 'loss') {
+        // No layer animation — forward activations stay from prior stage
+      } else if (stepModeStage === 'backward') {
+        setLastGradients({ dWeights: stepModeResult.avgDW, dBiases: stepModeResult.avgDB });
+        if (!dismissedCalloutsRef.current.has('firstBackprop')) {
+          setCallouts(prev => new Set([...prev, 'firstBackprop']));
+        }
+        for (let l = layerSizes.length - 1; l >= 0; l--) {
+          if (cancelled) return;
+          setAnimatingLayer(l);
+          await delay(300);
+        }
+        if (!cancelled) setAnimatingLayer(-1);
+      } else if (stepModeStage === 'update') {
+        // Apply weights exactly once; re-visiting this stage is idempotent.
+        if (!stepModeAppliedRef.current) {
+          stepModeAppliedRef.current = true;
+          networkRef.current = { weights: stepModeResult.weights, biases: stepModeResult.biases };
+          setNetwork({ weights: stepModeResult.weights, biases: stepModeResult.biases });
 
-    // Pre-compute the full epoch so all values are available before animation starts.
-    // The weight update is held back until Stage 4.
-    const result = trainOneEpoch(weights, biases, activationTypes, learningRate);
+          epochRef.current += 1;
+          setEpoch(epochRef.current);
 
-    setTrainingStatus('stepping');
-    setStepModeLoss(result.loss);
+          lossHistoryRef.current = [...lossHistoryRef.current,
+            { epoch: epochRef.current, loss: stepModeResult.loss }].slice(-200);
+          setLossHistory([...lossHistoryRef.current]);
 
-    // ── Stage 1: Forward pass ─────────────────────────────────────────────
-    // Animate activations for the first XOR sample [0,0] propagating left→right.
-    setStepModeStage('forward');
-    const fwdData = result.allForwardData[0];
-    for (let l = 0; l <= layerSizes.length - 1; l++) {
-      setAnimatingLayer(l);
-      setForwardPassDisplay({
-        activations:    fwdData.activations.slice(0, l + 1),
-        preActivations: fwdData.preActivations,
-      });
-      await new Promise(r => setTimeout(r, 420));
-    }
-    setAnimatingLayer(-1);
-    setForwardPassDisplay({ activations: fwdData.activations, preActivations: fwdData.preActivations });
+          if (stepModeResult.loss < bestLossRef.current - MIN_IMPROVEMENT) {
+            bestLossRef.current          = stepModeResult.loss;
+            epochsSinceImprovRef.current = 0;
+            setBestLoss(stepModeResult.loss);
+          } else {
+            epochsSinceImprovRef.current += 1;
+          }
+          setEpochsSinceImprovement(epochsSinceImprovRef.current);
 
-    // ── Stage 2: Loss ─────────────────────────────────────────────────────
-    // Pause with forward-pass activations visible so the user sees the output
-    // (the raw prediction that the BCE loss is computed from).
-    setStepModeStage('loss');
-    await new Promise(r => setTimeout(r, 1100));
+          const xorEval = evaluateXOR(
+            stepModeResult.weights, stepModeResult.biases, activationTypes
+          );
+          setXorResults(xorEval);
 
-    // ── Stage 3: Backward pass ────────────────────────────────────────────
-    // Show gradient magnitudes on edges and highlight layer-by-layer right→left.
-    // The firstBackprop callout fires here on the first explained step.
-    setStepModeStage('backward');
-    setLastGradients({ dWeights: result.avgDW, dBiases: result.avgDB });
-    if (!dismissedCalloutsRef.current.has('firstBackprop')) {
-      setCallouts(prev => new Set([...prev, 'firstBackprop']));
-    }
-    for (let l = layerSizes.length - 1; l >= 0; l--) {
-      setAnimatingLayer(l);
-      await new Promise(r => setTimeout(r, 420));
-    }
-    setAnimatingLayer(-1);
+          const allHighConf = xorEval.every(
+            r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE
+          );
+          if (allHighConf) consecutiveCorrectRef.current += 1;
+          else             consecutiveCorrectRef.current  = 0;
 
-    // ── Stage 4: Weight update ────────────────────────────────────────────
-    // Apply the pre-computed new weights and update all bookkeeping state.
-    setStepModeStage('update');
-    networkRef.current = { weights: result.weights, biases: result.biases };
-    setNetwork({ weights: result.weights, biases: result.biases });
+          const { converged, reason } = checkConvergence(
+            stepModeResult.loss, xorEval, consecutiveCorrectRef.current
+          );
+          if (converged) {
+            setTrainingStatus('converged');
+            setStopReason(reason);
+            if (!dismissedCalloutsRef.current.has('converged')) {
+              setCallouts(prev => new Set([...prev, 'converged']));
+            }
+          } else if (
+            stepModeResult.loss > PLATEAU_MIN_LOSS &&
+            epochsSinceImprovRef.current >= PLATEAU_PATIENCE &&
+            !dismissedCalloutsRef.current.has('lossPlateauing')
+          ) {
+            setTrainingStatus('plateaued');
+            setStopReason(
+              `Loss has not improved by >${MIN_IMPROVEMENT} in ${PLATEAU_PATIENCE} epochs`
+            );
+            setCallouts(prev => new Set([...prev, 'lossPlateauing']));
+          }
 
-    epochRef.current += 1;
-    setEpoch(epochRef.current);
-
-    lossHistoryRef.current = [...lossHistoryRef.current,
-      { epoch: epochRef.current, loss: result.loss }].slice(-200);
-    setLossHistory([...lossHistoryRef.current]);
-
-    if (result.loss < bestLossRef.current - MIN_IMPROVEMENT) {
-      bestLossRef.current          = result.loss;
-      epochsSinceImprovRef.current = 0;
-      setBestLoss(result.loss);
-    } else {
-      epochsSinceImprovRef.current += 1;
-    }
-    setEpochsSinceImprovement(epochsSinceImprovRef.current);
-
-    const xorEval = evaluateXOR(result.weights, result.biases, activationTypes);
-    setXorResults(xorEval);
-
-    const allHighConf = xorEval.every(r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE);
-    if (allHighConf) consecutiveCorrectRef.current += 1;
-    else             consecutiveCorrectRef.current  = 0;
-
-    const { converged, reason } = checkConvergence(
-      result.loss, xorEval, consecutiveCorrectRef.current
-    );
-    if (converged) {
-      setTrainingStatus('converged');
-      setStopReason(reason);
-      if (!dismissedCalloutsRef.current.has('converged')) {
-        setCallouts(prev => new Set([...prev, 'converged']));
+          // Vanishing gradient check — same logic as runTrainingStep
+          const firstLayerMax = Math.max(...stepModeResult.avgDW[0].flat().map(Math.abs));
+          const networkMax    = Math.max(...stepModeResult.avgDW.flat(2).map(Math.abs));
+          if (
+            networkMax > 0 &&
+            firstLayerMax / networkMax < 0.01 &&
+            stepModeResult.loss > PLATEAU_MIN_LOSS &&
+            !dismissedCalloutsRef.current.has('vanishingGradient')
+          ) {
+            setCallouts(prev => new Set([...prev, 'vanishingGradient']));
+          }
+        }
       }
-    }
 
-    await new Promise(r => setTimeout(r, 650));
+      if (!cancelled) {
+        setStepModeLayerAnimDone(true);
+        isAnimatingRef.current = false;
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+      setAnimatingLayer(-1);
+      isAnimatingRef.current = false;
+    };
+  // stepModeAppliedRef is a ref — intentionally omitted from deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepModeStage, stepModeResult]);
+
+  // Navigation handlers — defined before auto-play effect so Next can reference Done
+  const handleExplainedDone = useCallback(() => {
+    if (stepModeAutoTimerRef.current) {
+      clearTimeout(stepModeAutoTimerRef.current);
+      stepModeAutoTimerRef.current = null;
+    }
     setStepModeStage('idle');
-    if (!converged) setTrainingStatus('paused');
+    setStepModeResult(null);
+    setStepModeAutoPlay(false);
+    setAnimatingLayer(-1);
     isAnimatingRef.current = false;
-  }, [activationTypes, learningRate, isTraining, stepModeStage, layerSizes.length]);
+    if (!['converged', 'plateaued', 'maxEpochs'].includes(trainingStatus)) {
+      setTrainingStatus('paused');
+    }
+  }, [trainingStatus]);
+
+  const handleExplainedPrev = useCallback(() => {
+    const stages = ['forward', 'loss', 'backward', 'update'];
+    const idx = stages.indexOf(stepModeStage);
+    if (idx > 0) setStepModeStage(stages[idx - 1]);
+  }, [stepModeStage]);
+
+  const handleExplainedNext = useCallback(() => {
+    const stages = ['forward', 'loss', 'backward', 'update'];
+    const idx = stages.indexOf(stepModeStage);
+    if (idx < stages.length - 1) setStepModeStage(stages[idx + 1]);
+    else handleExplainedDone();
+  }, [stepModeStage, handleExplainedDone]);
+
+  // Auto-play: when enabled and current stage animation is complete, schedule Next.
+  useEffect(() => {
+    if (stepModeAutoTimerRef.current) {
+      clearTimeout(stepModeAutoTimerRef.current);
+      stepModeAutoTimerRef.current = null;
+    }
+    if (!stepModeAutoPlay || !stepModeLayerAnimDone || stepModeStage === 'idle') return;
+    stepModeAutoTimerRef.current = setTimeout(
+      () => handleExplainedNext(),
+      stepModeAutoSpeed * 1000
+    );
+    return () => {
+      if (stepModeAutoTimerRef.current) {
+        clearTimeout(stepModeAutoTimerRef.current);
+        stepModeAutoTimerRef.current = null;
+      }
+    };
+  }, [stepModeAutoPlay, stepModeLayerAnimDone, stepModeStage, stepModeAutoSpeed, handleExplainedNext]);
 
   // ── Click-to-predict with forward-pass animation ──────────────────────────
   // Runs a real forward pass on the clicked canvas point, then animates the
@@ -1678,8 +1786,8 @@ export default function App() {
                 Step 1 Epoch
               </button>
 
-              {/* Phase 2: Explained epoch button — shows 4-stage backprop animation */}
-              <button onClick={runExplainedEpoch} disabled={isBusy}
+              {/* Phase 2: Explained epoch button — user-paced 4-stage mode */}
+              <button onClick={startExplainedEpoch} disabled={isBusy}
                 className="w-full py-1 rounded text-xs bg-violet-900/70 hover:bg-violet-800 text-violet-300 disabled:opacity-40 disabled:cursor-not-allowed border border-violet-700/50">
                 Explained Step ←→
               </button>
@@ -1738,10 +1846,11 @@ export default function App() {
             </div>
           )}
 
-          {/* ── Explained Step Banner — visible during runExplainedEpoch ───────── */}
+          {/* ── Explained Step Banner — visible while step mode is active ───────── */}
           {stepModeStage !== 'idle' && (() => {
             const stages = ['forward', 'loss', 'backward', 'update'];
             const stageIdx = stages.indexOf(stepModeStage);
+            const isLast = stageIdx === stages.length - 1;
             const col = {
               forward:  { border: 'border-blue-500',    bg: 'bg-blue-950/60',    title: 'text-blue-300',    dot: 'bg-blue-400' },
               loss:     { border: 'border-amber-500',   bg: 'bg-amber-950/60',   title: 'text-amber-300',   dot: 'bg-amber-400' },
@@ -1750,7 +1859,7 @@ export default function App() {
             }[stepModeStage];
             return (
               <div className={`flex-shrink-0 border-l-4 ${col.border} ${col.bg} rounded-r-lg p-2.5 text-xs`}>
-                {/* Progress dots */}
+                {/* Progress dots + close button */}
                 <div className="flex items-center gap-1.5 mb-1.5">
                   {stages.map((s, i) => (
                     <div key={s} className={`w-2 h-2 rounded-full transition-all ${
@@ -1759,7 +1868,12 @@ export default function App() {
                     }`} />
                   ))}
                   <span className="text-slate-500 ml-0.5 font-mono">Stage {stageIdx + 1} of 4</span>
+                  <button onClick={handleExplainedDone}
+                    className="ml-auto text-slate-500 hover:text-white text-xs leading-none px-1 py-0.5 rounded hover:bg-slate-700/60"
+                    title="Close explained step">✕</button>
                 </div>
+
+                {/* Per-stage educational content */}
                 {stepModeStage === 'forward' && (
                   <div>
                     <div className={`font-bold ${col.title} mb-0.5`}>
@@ -1794,6 +1908,40 @@ export default function App() {
                     <div className="mt-1 font-mono text-emerald-400">W ← W − {learningRate.toFixed(3)}·∂L/∂W <span className="text-slate-600">(optimizer.step())</span></div>
                   </div>
                 )}
+
+                {/* Navigation controls */}
+                <div className="flex items-center gap-2 border-t border-slate-700/60 pt-2 mt-2">
+                  <button onClick={handleExplainedPrev} disabled={stageIdx === 0}
+                    className="px-2 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 transition-colors">
+                    ← Prev
+                  </button>
+                  <button onClick={() => setStepModeAutoPlay(v => !v)}
+                    className={`px-2 py-1 rounded text-xs border transition-colors ${
+                      stepModeAutoPlay
+                        ? 'bg-slate-600 text-white border-slate-500'
+                        : 'bg-slate-800 text-slate-400 border-slate-600 hover:text-slate-300'
+                    }`}>
+                    {stepModeAutoPlay ? '⏸ Auto' : '▶ Auto'}
+                  </button>
+                  {stepModeAutoPlay ? (
+                    <div className="flex items-center gap-1 flex-1 min-w-0">
+                      <span className="text-slate-400 shrink-0">{stepModeAutoSpeed}s</span>
+                      <input type="range" min={1} max={10} step={0.5} value={stepModeAutoSpeed}
+                        onChange={e => setStepModeAutoSpeed(+e.target.value)}
+                        className="flex-1 accent-slate-400 min-w-0" />
+                    </div>
+                  ) : (
+                    <div className="flex-1" />
+                  )}
+                  <button onClick={isLast ? handleExplainedDone : handleExplainedNext}
+                    className={`px-3 py-1 rounded text-xs font-semibold transition-colors ${
+                      isLast
+                        ? 'bg-emerald-700 hover:bg-emerald-600 text-white'
+                        : 'bg-blue-700 hover:bg-blue-600 text-white'
+                    }`}>
+                    {isLast ? 'Done ✓' : stepModeLayerAnimDone ? 'Next →' : 'Next…'}
+                  </button>
+                </div>
               </div>
             );
           })()}
