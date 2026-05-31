@@ -493,8 +493,17 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
           if (Math.abs(v) > maxGradMag) maxGradMag = Math.abs(v);
   }
 
+  // viewBox lets the SVG scale its coordinate system to fill the CSS width.
+  // Explicit style height prevents the proportional-height calculation from
+  // making the graph taller than the coordinate space (which would leave a
+  // large blank area below the neurons when the panel is wide).
+  // w-full: fills available width; block: removes the inline baseline gap.
   return (
-    <svg width={SVG_W} height={SVG_H} className="w-full h-full">
+    <svg
+      viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+      className="w-full block"
+      style={{ height: `${SVG_H}px` }}
+    >
       {/* Edges */}
       {layout.slice(0, -1).map((fromLayer, li) =>
         fromLayer.map((from, fi) =>
@@ -1344,8 +1353,12 @@ export default function App() {
             </div>
           )}
 
-          {/* Network Graph */}
-          <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-2 flex-1 min-h-0">
+          {/* Network Graph — flex-shrink-0 so it only takes exactly the
+              height the SVG needs (SVG_H + header + padding ≈ 360px).
+              Previously flex-1 caused it to fill all remaining vertical
+              space, leaving hundreds of pixels of empty gray below the
+              neurons. */}
+          <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-2 flex-shrink-0">
             <div className="flex items-center justify-between mb-1">
               <h2 className="text-xs font-semibold text-slate-300">Network</h2>
               <div className="flex items-center gap-3 text-xs">
