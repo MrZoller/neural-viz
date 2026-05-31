@@ -503,11 +503,12 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
   }
 
   return (
-    <svg
-      viewBox={`0 0 ${SVG_W} ${SVG_H}`}
-      className="w-full block"
-      style={{ height: `${SVG_H}px` }}
-    >
+    <div>
+      <svg
+        viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+        className="w-full block"
+        style={{ height: `${SVG_H}px` }}
+      >
       {/* ── Edges ──────────────────────────────────────────────────────────── */}
       {layout.slice(0, -1).map((fromLayer, li) =>
         fromLayer.map((from, fi) =>
@@ -616,28 +617,27 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
         </text>
       ))}
 
-      {/* ── Gradient legend ────────────────────────────────────────────────── */}
-      {backpropData && (
-        <g transform="translate(8,280)">
-          {/* Clarify: colors encode absolute magnitude, not signed value.
-              The sign is present in the numeric labels on edges (positive = weight
-              should decrease; negative = weight should increase). */}
-          <text fill="#6b7280" fontSize={7.5}>
-            Edge color = |∂L/∂w|  (absolute magnitude · avg over 4 XOR samples)
-          </text>
-          {[0, .17, .33, .5, .67, .83, 1].map((t, i) => (
-            <rect key={i} x={8 + i * 14} y={8} width={14} height={8} fill={gradientColor(t, 1)} />
-          ))}
-          <text x={8}   y={24} fill="#94a3b8" fontSize={7.5} textAnchor="start">0</text>
-          <text x={106} y={24} fill="#94a3b8" fontSize={7.5} textAnchor="end">
-            {maxGradMag > 0 ? `max = ${maxGradMag.toFixed(4)}` : 'max = n/a'}
-          </text>
-          <text x={115} y={24} fill="#4b5563" fontSize={7}>
-            {totalEdges > 16 ? '(top 8 edges labeled)' : '(all edges labeled)'}
-          </text>
-        </g>
-      )}
     </svg>
+    {/* Gradient legend in HTML so it can never overlap SVG neurons */}
+    {backpropData && (
+      <div className="flex items-center gap-1.5 px-1 pt-1 font-mono text-slate-500 flex-wrap"
+           style={{ fontSize: '7.5px' }}>
+        <span>Edge color = |∂L/∂w| (absolute magnitude · avg over 4 XOR samples)</span>
+        <div className="flex shrink-0">
+          {[0, .17, .33, .5, .67, .83, 1].map((t, i) => (
+            <div key={i} style={{ width: 14, height: 8, backgroundColor: gradientColor(t, 1) }} />
+          ))}
+        </div>
+        <span className="text-slate-600 shrink-0">0</span>
+        <span className="text-slate-400 shrink-0">
+          {maxGradMag > 0 ? `max = ${maxGradMag.toFixed(4)}` : 'max = n/a'}
+        </span>
+        <span className="text-slate-700 shrink-0">
+          {totalEdges > 16 ? '(top 8 edges labeled)' : '(all edges labeled)'}
+        </span>
+      </div>
+    )}
+    </div>
   );
 }
 
