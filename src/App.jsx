@@ -1,5 +1,5 @@
 // =============================================================================
-// Neural Network Learning Tool — Phase 1 MVP
+// Neural Network Learning Tool — Phase 1 Hardened
 // =============================================================================
 // All neural-network math is implemented from scratch in JavaScript.
 // No ML libraries. PyTorch snippets are explanatory text only.
@@ -29,13 +29,13 @@ const ACTIVATIONS = {
     label: 'ReLU',
     // ReLU: max(0, x). Kills negative values, keeps positives unchanged.
     fn: x => Math.max(0, x),
-    // Derivative is 1 when x > 0, 0 otherwise (technically undefined at 0, we use 0).
+    // Derivative is 1 when x > 0, 0 otherwise (undefined at 0 — we use 0).
     derivative: x => (x > 0 ? 1 : 0),
     color: '#60a5fa',
   },
   tanh: {
     label: 'Tanh',
-    // tanh maps any real to (-1, 1). Zero-centered, so gradients are better behaved than sigmoid.
+    // tanh maps any real to (-1, 1). Zero-centered, so gradients are better behaved.
     fn: x => Math.tanh(x),
     // Derivative: 1 - tanh²(x). Peaks at 1 when x=0, approaches 0 for large |x|.
     derivative: x => 1 - Math.tanh(x) ** 2,
@@ -44,10 +44,8 @@ const ACTIVATIONS = {
   sigmoid: {
     label: 'Sigmoid',
     // σ(x) = 1 / (1 + e^−x). Maps any real to (0, 1).
-    // Used for binary classification output to get a probability.
     fn: x => 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, x)))),
-    // Derivative: σ(x) · (1 − σ(x)). Max value is 0.25 — this causes vanishing gradients
-    // in deep networks because each layer multiplies by at most 0.25.
+    // Derivative: σ(x)·(1−σ(x)). Max is 0.25 — causes vanishing gradients in deep nets.
     derivative: x => {
       const s = 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, x))));
       return s * (1 - s);
@@ -58,8 +56,9 @@ const ACTIVATIONS = {
 
 // =============================================================================
 // SECTION 2 — XOR DATASET
-// XOR is the classic test for neural networks because it's not linearly separable.
-// A single-layer perceptron cannot solve XOR; you need at least one hidden layer.
+// XOR is the canonical test because it is not linearly separable.
+// A network with no hidden layers cannot solve it: the four corners of the
+// unit square cannot be split into two groups by a single line.
 // =============================================================================
 const XOR_DATA = [
   { input: [0, 0], label: 0 },
@@ -70,91 +69,74 @@ const XOR_DATA = [
 
 // =============================================================================
 // SECTION 3 — NETWORK INITIALIZATION
-// Xavier (Glorot) initialization scales weights by sqrt(2 / (fan_in + fan_out)).
-// This keeps variance stable across layers at the start of training.
-// In PyTorch: torch.nn.init.xavier_uniform_(layer.weight)
+// Xavier (Glorot) initialization: scale = sqrt(2 / (fan_in + fan_out)).
+// This keeps activation variance roughly constant at the start of training,
+// avoiding exploding or vanishing signals before any learning has happened.
+// PyTorch: torch.nn.init.xavier_uniform_(layer.weight)
 // =============================================================================
 function initNetwork(layerSizes) {
   const weights = [];
   const biases = [];
-
   for (let l = 0; l < layerSizes.length - 1; l++) {
-    const fanIn = layerSizes[l];
+    const fanIn  = layerSizes[l];
     const fanOut = layerSizes[l + 1];
-    // Xavier scale: maintains signal variance through forward pass
-    const scale = Math.sqrt(2.0 / (fanIn + fanOut));
-
-    // W[l] is a [fanOut × fanIn] matrix, stored as an array of rows.
-    // W[l][j][k] is the weight from neuron k in layer l to neuron j in layer l+1.
+    const scale  = Math.sqrt(2.0 / (fanIn + fanOut));
+    // W[l] is [fanOut × fanIn]. W[l][j][k] = weight from neuron k → neuron j.
     const W = Array.from({ length: fanOut }, () =>
       Array.from({ length: fanIn }, () => (Math.random() * 2 - 1) * scale)
     );
     weights.push(W);
-
-    // Biases initialized to zero. PyTorch default for Linear layers.
-    biases.push(new Array(fanOut).fill(0));
+    biases.push(new Array(fanOut).fill(0)); // PyTorch Linear bias default
   }
-
   return { weights, biases };
 }
 
 // =============================================================================
 // SECTION 4 — FORWARD PASS
-// Propagates an input vector through all layers, computing z and a at each step.
-// Returns all intermediate values so backprop can reuse them.
+// Propagates one input vector through all layers, storing z and a at every step.
+// Returns all intermediates so backprop can reuse them without re-computing.
 //
-// PyTorch equivalent:
-//   output = model(input_tensor)
-//   # Internally: for each Linear + activation layer in model.forward()
+// PyTorch: output = model(input_tensor)   ← model.forward() does this internally
 // =============================================================================
 function forwardPass(input, weights, biases, hiddenActivationTypes) {
-  // activations[0] = the raw input vector
-  const activations = [input];
-  // preActivations[l] = z[l] = W[l-1]·a[l-1] + b[l-1]  (null for input layer)
-  const preActivations = [null];
+  const activations    = [input]; // activations[0] = the raw input
+  const preActivations = [null];  // preActivations[l] = z[l], null for input layer
 
-  const L = weights.length; // number of weight matrices
-
+  const L = weights.length;
   for (let l = 0; l < L; l++) {
-    const W = weights[l];
-    const b = biases[l];
-    const prevA = activations[l];
+    const W      = weights[l];
+    const b      = biases[l];
+    const prevA  = activations[l];
 
-    // Compute z = W · prevA + b  (matrix-vector product)
+    // z = W · prevA + b  (matrix-vector product)
     const z = W.map((row, j) => {
       let sum = b[j];
-      for (let k = 0; k < prevA.length; k++) {
-        sum += row[k] * prevA[k];
-      }
+      for (let k = 0; k < prevA.length; k++) sum += row[k] * prevA[k];
       return sum;
     });
 
-    // Apply activation:
-    //   - Last layer (output): always sigmoid to get a probability in (0,1)
-    //   - Hidden layers: use the configured activation for that layer
-    const isOutputLayer = l === L - 1;
-    const activationType = isOutputLayer ? 'sigmoid' : (hiddenActivationTypes[l] || 'relu');
-    const activationFn = ACTIVATIONS[activationType].fn;
-    const a = z.map(activationFn);
+    // Activation: output layer always uses sigmoid (gives probability in (0,1));
+    // hidden layers use the per-layer configured function.
+    const isOutput     = l === L - 1;
+    const activType    = isOutput ? 'sigmoid' : (hiddenActivationTypes[l] || 'relu');
+    const activationFn = ACTIVATIONS[activType].fn;
 
     preActivations.push(z);
-    activations.push(a);
+    activations.push(z.map(activationFn));
   }
-
   return { activations, preActivations };
 }
 
 // =============================================================================
 // SECTION 5 — LOSS FUNCTION
-// Binary Cross-Entropy (BCE): the standard loss for binary classification.
-//   L = -1/N · Σ [y·log(ŷ) + (1-y)·log(1-ŷ)]
-// where y is the true label and ŷ is the predicted probability.
-// Intuitively: punishes confident wrong predictions very harshly (log of small number).
+// Binary Cross-Entropy (BCE):
+//   L = −(1/N) · Σ [y·log(ŷ) + (1−y)·log(1−ŷ)]
 //
-// PyTorch: torch.nn.BCELoss() or F.binary_cross_entropy(output, target)
+// Punishes confident wrong predictions very harshly (log → −∞ near 0).
+// PyTorch: nn.BCELoss() or F.binary_cross_entropy(output, target)
 // =============================================================================
 function computeLoss(predictions, targets) {
-  const eps = 1e-12; // clamp to avoid log(0) = -Infinity
+  const eps = 1e-12; // clamp to prevent log(0) = −Infinity
   let total = 0;
   for (let i = 0; i < predictions.length; i++) {
     const p = Math.max(eps, Math.min(1 - eps, predictions[i][0]));
@@ -166,66 +148,50 @@ function computeLoss(predictions, targets) {
 
 // =============================================================================
 // SECTION 6 — BACKPROPAGATION
-// Computes gradients of the loss w.r.t. every weight and bias using the chain rule.
-// This is what PyTorch's loss.backward() does automatically via autograd.
+// Computes gradients of loss w.r.t. every weight and bias via the chain rule.
+// This is what PyTorch's loss.backward() does automatically.
 //
-// The key recurrence:
-//   δ[L]   = a[L] − y                          (output layer, BCE + sigmoid shortcut)
-//   δ[l]   = (W[l]ᵀ · δ[l+1]) ⊙ σ'(z[l])    (hidden layers, ⊙ = elementwise)
-//   dW[l]  = δ[l+1] · a[l]ᵀ                   (outer product)
+// Key recurrence:
+//   δ[L]   = a[L] − y                          ← output layer (BCE+sigmoid shortcut)
+//   δ[l]   = (W[l]ᵀ · δ[l+1]) ⊙ σ'(z[l])    ← hidden layers (⊙ = elementwise)
+//   dW[l]  = δ[l+1] · a[l]ᵀ                   ← outer product
 //   db[l]  = δ[l+1]
 //
-// The "BCE + sigmoid" shortcut: when BCE loss is paired with sigmoid output,
-// the combined gradient simplifies to (output − target). This cancels the
-// sigmoid derivative in the output layer and avoids numerical instability.
+// The "BCE + sigmoid shortcut": when BCE loss is combined with a sigmoid output,
+// the gradient simplifies to (ŷ − y), cancelling the sigmoid derivative. This
+// avoids numerical instability from σ'(z) approaching 0 in the output layer.
 // =============================================================================
 function backprop(targets, activations, preActivations, weights, hiddenActivationTypes) {
   const L = weights.length;
-
-  // Initialize gradient arrays with zeros, same shape as weights/biases
   const dWeights = weights.map(W => W.map(row => row.map(() => 0)));
-  const dBiases = weights.map((W, l) => new Array(W.length).fill(0));
+  const dBiases  = weights.map(W => new Array(W.length).fill(0));
+  const deltas   = new Array(L + 1).fill(null);
 
-  // δ[l] stored for each layer l from 1..L
-  const deltas = new Array(L + 1).fill(null);
+  // Output layer: δ[L] = a[L] − y
+  deltas[L] = activations[L].map((val, j) => val - targets[j]);
 
-  // Output layer delta: δ[L] = a[L] − y  (per sample, averaged across batch)
-  const outputA = activations[L];
-  deltas[L] = outputA.map((val, j) => val - targets[j]);
-
-  // Backpropagate the error signal from layer L-1 down to layer 1
+  // Backpropagate through hidden layers: δ[l] = (W[l]ᵀ · δ[l+1]) ⊙ activation'(z[l])
   for (let l = L - 1; l >= 1; l--) {
-    // The activation at layer l is hiddenActivationTypes[l-1]
-    // (layer 0 is input, layer 1 is first hidden layer, etc.)
-    const activationType = hiddenActivationTypes[l - 1] || 'relu';
-    const actDeriv = ACTIVATIONS[activationType].derivative;
-    const z = preActivations[l];
+    const activType = hiddenActivationTypes[l - 1] || 'relu';
+    const actDeriv  = ACTIVATIONS[activType].derivative;
+    const z         = preActivations[l];
     const nextDelta = deltas[l + 1];
-    const nextW = weights[l]; // W[l] connects layer l to layer l+1
+    const nextW     = weights[l]; // W[l] connects layer l → l+1
 
-    // δ[l] = (W[l]ᵀ · δ[l+1]) ⊙ activation'(z[l])
     deltas[l] = z.map((zVal, j) => {
-      // Sum_{k} W[l][k][j] * δ[l+1][k]  — transposed matrix multiply
+      // Transposed matrix-vector product: Σ_k W[l][k][j] · δ[l+1][k]
       let sum = 0;
-      for (let k = 0; k < nextDelta.length; k++) {
-        sum += nextW[k][j] * nextDelta[k];
-      }
-      // Multiply by the local derivative (chain rule)
-      return sum * actDeriv(zVal);
+      for (let k = 0; k < nextDelta.length; k++) sum += nextW[k][j] * nextDelta[k];
+      return sum * actDeriv(zVal); // chain rule: multiply by local derivative
     });
   }
 
   // Compute weight and bias gradients from deltas
   for (let l = 0; l < L; l++) {
-    const delta = deltas[l + 1]; // error signal flowing into layer l+1
-    const prevA = activations[l]; // activations from layer l (the inputs to this weight matrix)
-
+    const delta = deltas[l + 1];
+    const prevA = activations[l];
     for (let j = 0; j < delta.length; j++) {
-      // dW[l][j][k] = δ[l+1][j] · a[l][k]  (outer product row j)
-      for (let k = 0; k < prevA.length; k++) {
-        dWeights[l][j][k] += delta[j] * prevA[k];
-      }
-      // db[l][j] = δ[l+1][j]
+      for (let k = 0; k < prevA.length; k++) dWeights[l][j][k] += delta[j] * prevA[k];
       dBiases[l][j] += delta[j];
     }
   }
@@ -235,52 +201,44 @@ function backprop(targets, activations, preActivations, weights, hiddenActivatio
 
 // =============================================================================
 // SECTION 7 — GRADIENT DESCENT UPDATE
-// W[l] ← W[l] − lr · dW[l]   (subtract because we want to minimize loss)
-// b[l] ← b[l] − lr · db[l]
-//
-// PyTorch equivalent:
-//   optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
-//   optimizer.step()
+// W[l] ← W[l] − lr · ∂L/∂W[l]   (step opposite to the gradient = downhill)
+// PyTorch: optimizer.step()  after optimizer.zero_grad() + loss.backward()
 // =============================================================================
 function updateWeights(weights, biases, dWeights, dBiases, lr) {
-  const newWeights = weights.map((W, l) =>
-    W.map((row, j) =>
-      row.map((w, k) => w - lr * dWeights[l][j][k])
-    )
-  );
-  const newBiases = biases.map((b, l) =>
-    b.map((val, j) => val - lr * dBiases[l][j])
-  );
-  return { weights: newWeights, biases: newBiases };
+  return {
+    weights: weights.map((W, l) =>
+      W.map((row, j) => row.map((w, k) => w - lr * dWeights[l][j][k]))
+    ),
+    biases: biases.map((b, l) =>
+      b.map((val, j) => val - lr * dBiases[l][j])
+    ),
+  };
 }
 
 // =============================================================================
 // SECTION 8 — ONE TRAINING EPOCH (FULL BATCH)
-// Runs one complete forward+backward+update cycle over all training examples.
-// We use full-batch gradient descent here (not mini-batch/SGD).
-// In full batch, we sum gradients over all examples then average.
+// Runs forward → loss → backward → update over all 4 XOR examples.
+// "Full-batch" means all gradients are accumulated, then averaged, before the
+// single weight update. This is the simplest form of gradient descent.
 //
-// PyTorch equivalent:
-//   for epoch in range(num_epochs):
-//     optimizer.zero_grad()
-//     output = model(X)
-//     loss = criterion(output, y)
-//     loss.backward()
-//     optimizer.step()
+// PyTorch:
+//   optimizer.zero_grad()
+//   output = model(X)
+//   loss = criterion(output, y)
+//   loss.backward()
+//   optimizer.step()
 // =============================================================================
 function trainOneEpoch(weights, biases, hiddenActivationTypes, lr) {
-  const layerSizes = deriveLayerSizes(weights);
   const L = weights.length;
   const N = XOR_DATA.length;
 
-  // Accumulated gradients across the batch
+  // Gradient accumulators (same shape as weights / biases)
   const totalDW = weights.map(W => W.map(row => row.map(() => 0)));
-  const totalDB = weights.map((W, l) => new Array(W.length).fill(0));
+  const totalDB = weights.map(W => new Array(W.length).fill(0));
 
-  // Collect all predictions for loss computation
-  const allPredictions = [];
-  const allTargets = [];
-  const allForwardData = [];
+  const allPredictions  = [];
+  const allTargets      = [];
+  const allForwardData  = [];
 
   for (const { input, label } of XOR_DATA) {
     const { activations, preActivations } = forwardPass(
@@ -290,23 +248,19 @@ function trainOneEpoch(weights, biases, hiddenActivationTypes, lr) {
     allTargets.push(label);
     allForwardData.push({ activations, preActivations });
 
-    // Backprop for this sample
     const { dWeights, dBiases } = backprop(
       [label], activations, preActivations, weights, hiddenActivationTypes
     );
 
-    // Accumulate gradients (will average after the loop)
+    // Accumulate; we'll average after all samples are processed
     for (let l = 0; l < L; l++) {
       for (let j = 0; j < dWeights[l].length; j++) {
-        for (let k = 0; k < dWeights[l][j].length; k++) {
-          totalDW[l][j][k] += dWeights[l][j][k];
-        }
+        for (let k = 0; k < dWeights[l][j].length; k++) totalDW[l][j][k] += dWeights[l][j][k];
         totalDB[l][j] += dBiases[l][j];
       }
     }
   }
 
-  // Average gradients over the batch, then update weights
   const avgDW = totalDW.map(W => W.map(row => row.map(v => v / N)));
   const avgDB = totalDB.map(b => b.map(v => v / N));
 
@@ -314,42 +268,51 @@ function trainOneEpoch(weights, biases, hiddenActivationTypes, lr) {
     weights, biases, avgDW, avgDB, lr
   );
 
-  const loss = computeLoss(allPredictions, allTargets);
-
-  return { weights: newWeights, biases: newBiases, loss, avgDW, avgDB, allForwardData };
+  return {
+    weights:      newWeights,
+    biases:       newBiases,
+    loss:         computeLoss(allPredictions, allTargets),
+    avgDW,
+    avgDB,
+    allForwardData,
+  };
 }
 
-// Helper: infer layer sizes from weight matrices
+// Helper: derive [inputSize, ...hiddenSizes, outputSize] from weight shapes
 function deriveLayerSizes(weights) {
   if (weights.length === 0) return [];
   const sizes = [weights[0][0].length];
-  for (const W of weights) {
-    sizes.push(W.length);
-  }
+  for (const W of weights) sizes.push(W.length);
   return sizes;
 }
 
 // =============================================================================
 // SECTION 9 — DECISION BOUNDARY COMPUTATION
-// Sample a grid over [0,1]×[0,1] and run forward pass at each point.
-// Returns a 2D array of predicted probabilities.
-// This is how you'd visualize a classifier's decision surface in PyTorch too —
-// just pass a meshgrid through the model with torch.no_grad().
+// Sample a gridSize×gridSize grid over [0,1]² and run a real forward pass at
+// each cell. The returned probabilities are used to color the canvas.
+//
+// This is NOT approximated or mocked. Every cell is an actual model.forward()
+// call using the current trained weights. The y-axis is flipped (1 − row/…)
+// so that row=0 (canvas top) corresponds to x₂=1, matching the convention
+// used everywhere else: cy = (1 − x₂) · H puts x₂=0 at the bottom.
+//
+// PyTorch equivalent:
+//   with torch.no_grad():
+//     xx, yy = torch.meshgrid(torch.linspace(0,1,grid), torch.linspace(0,1,grid))
+//     Z = model(torch.stack([xx.flatten(), yy.flatten()], dim=1)).reshape(grid, grid)
 // =============================================================================
 function computeDecisionBoundary(weights, biases, hiddenActivationTypes, gridSize = 40) {
+  const L    = weights.length;
   const grid = [];
-  const L = weights.length;
   for (let row = 0; row < gridSize; row++) {
     const gridRow = [];
     for (let col = 0; col < gridSize; col++) {
-      // Map grid indices to [0,1] space.
-      // row=0 is the top of the canvas; the y-axis convention used everywhere
-      // else in this file places x₂=1 at the top (cy = (1-x₂)·H).
-      // Flipping here keeps the boundary colours aligned with the drawn points.
       const x1 = col / (gridSize - 1);
+      // Flip y: row=0 is canvas top; x₂=1 should be at the top so that the
+      // drawn XOR training points (which use cy = (1−x₂)·H) align with the heatmap.
       const x2 = 1 - row / (gridSize - 1);
       const { activations } = forwardPass([x1, x2], weights, biases, hiddenActivationTypes);
-      gridRow.push(activations[L][0]); // output probability
+      gridRow.push(activations[L][0]); // output probability p(class=1)
     }
     grid.push(gridRow);
   }
@@ -358,238 +321,225 @@ function computeDecisionBoundary(weights, biases, hiddenActivationTypes, gridSiz
 
 // =============================================================================
 // SECTION 10 — PYTORCH CODE GENERATOR
-// Generates a PyTorch code string reflecting the current network architecture.
-// Updates live as the user changes layers/neurons/activations.
+// Builds a PyTorch code string reflecting the current architecture.
+// Updates live as the user changes layers, neurons, or activations.
 // =============================================================================
 function generatePyTorchCode(layerSizes, hiddenActivationTypes) {
-  const activationImports = [...new Set(hiddenActivationTypes)];
   const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
-
   let layers = '';
-  // Input → first hidden
-  layers += `    nn.Linear(${layerSizes[0]}, ${layerSizes[1]}),  # W shape: [${layerSizes[1]}, ${layerSizes[0]}]\n`;
+  layers += `    nn.Linear(${layerSizes[0]}, ${layerSizes[1]}),  # W: [${layerSizes[1]}×${layerSizes[0]}]\n`;
   layers += `    ${actMap[hiddenActivationTypes[0]] || 'nn.ReLU()'},\n`;
-
-  // Hidden → hidden
   for (let i = 1; i < layerSizes.length - 2; i++) {
-    layers += `    nn.Linear(${layerSizes[i]}, ${layerSizes[i + 1]}),  # W shape: [${layerSizes[i + 1]}, ${layerSizes[i]}]\n`;
+    layers += `    nn.Linear(${layerSizes[i]}, ${layerSizes[i+1]}),  # W: [${layerSizes[i+1]}×${layerSizes[i]}]\n`;
     layers += `    ${actMap[hiddenActivationTypes[i]] || 'nn.ReLU()'},\n`;
   }
+  const lastH = layerSizes[layerSizes.length - 2];
+  layers += `    nn.Linear(${lastH}, 1),   # output logit\n`;
+  layers += `    nn.Sigmoid(),              # → probability\n`;
 
-  // Last hidden → output
-  const lastHidden = layerSizes[layerSizes.length - 2];
-  layers += `    nn.Linear(${lastHidden}, 1),  # Output: single logit\n`;
-  layers += `    nn.Sigmoid(),                  # → probability in (0, 1)\n`;
+  return `import torch, torch.nn as nn
 
-  return `import torch
-import torch.nn as nn
-
-# Network architecture: ${layerSizes.join(' → ')} → 1
-# Hidden activations: ${hiddenActivationTypes.join(', ')}
+# Architecture: ${layerSizes.join(' → ')} → 1
 model = nn.Sequential(
 ${layers})
 
-# Loss: Binary Cross-Entropy
-# Matches our JS: -(y*log(p) + (1-y)*log(1-p))
 criterion = nn.BCELoss()
+optimizer = torch.optim.SGD(
+    model.parameters(), lr=0.1)
 
-# Optimizer: vanilla SGD (same as our gradient descent)
-optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+X = torch.tensor(
+    [[0,0],[0,1],[1,0],[1,1]], dtype=torch.float)
+y = torch.tensor(
+    [[0],[1],[1],[0]],         dtype=torch.float)
 
-# XOR dataset
-X = torch.tensor([[0.,0.],[0.,1.],[1.,0.],[1.,1.]])
-y = torch.tensor([[0.],[1.],[1.],[0.]])
-
-# Training loop
-for epoch in range(num_epochs):
-    optimizer.zero_grad()   # Clear old gradients
-    output = model(X)       # Forward pass
-    loss = criterion(output, y)  # BCE loss
-    loss.backward()         # Backprop: computes all dW, db
-    optimizer.step()        # W -= lr * dW  for each parameter`;
+for epoch in range(max_epochs):
+    optimizer.zero_grad()    # clear ∂L/∂W
+    out  = model(X)          # forward pass
+    loss = criterion(out, y) # BCE loss
+    loss.backward()          # backprop
+    optimizer.step()         # W -= lr·dW
+    # Stop when solved:
+    if loss.item() < 0.001:
+        break`;
 }
 
 // =============================================================================
 // SECTION 11 — COLOR UTILITIES
-// Map a value in [0,1] to an RGB color for visualization.
 // =============================================================================
 
-// Activation magnitude → color (blue=low, orange=high)
-function activationColor(value, alpha = 1) {
-  // Clamp to [-1, 1] range for display (activations can be negative with tanh/relu)
+// Activation magnitude → blue (low/negative) to orange (high/positive)
+function activationColor(value) {
   const t = Math.max(0, Math.min(1, (value + 1) / 2));
-  const r = Math.round(t * 251 + (1 - t) * 30);
-  const g = Math.round(t * 146 + (1 - t) * 144);
-  const b = Math.round(t * 60 + (1 - t) * 255);
-  return `rgba(${r},${g},${b},${alpha})`;
+  return `rgba(${Math.round(t*251+(1-t)*30)},${Math.round(t*146+(1-t)*144)},${Math.round(t*60+(1-t)*255)},1)`;
 }
 
-// Decision boundary: class 0 = blue, class 1 = orange, interpolated by probability
+// Decision boundary: class-0=blue, class-1=orange, blended by output probability
 function boundaryColor(prob) {
-  const r = Math.round(prob * 251 + (1 - prob) * 59);
-  const g = Math.round(prob * 146 + (1 - prob) * 130);
-  const b = Math.round(prob * 60 + (1 - prob) * 246);
-  return `rgb(${r},${g},${b})`;
+  return `rgb(${Math.round(prob*251+(1-prob)*59)},${Math.round(prob*146+(1-prob)*130)},${Math.round(prob*60+(1-prob)*246)})`;
 }
 
-// Gradient magnitude → heatmap color (gray=near-zero, red=large)
+// Gradient magnitude → gray (≈0) to red (large)
 function gradientColor(magnitude, maxMag) {
   if (maxMag === 0) return 'rgba(100,100,100,0.3)';
   const t = Math.min(1, magnitude / maxMag);
-  const r = Math.round(t * 239 + (1 - t) * 75);
-  const g = Math.round(t * 68 + (1 - t) * 85);
-  const b = Math.round(t * 68 + (1 - t) * 99);
-  return `rgba(${r},${g},${b},${0.3 + t * 0.7})`;
+  return `rgba(${Math.round(t*239+(1-t)*75)},${Math.round(t*68+(1-t)*85)},${Math.round(t*68+(1-t)*99)},${0.3+t*0.7})`;
 }
 
 // =============================================================================
 // SECTION 12 — NETWORK GRAPH LAYOUT
-// Compute SVG positions for each neuron given layer sizes.
 // =============================================================================
 function computeLayout(layerSizes, svgWidth, svgHeight) {
-  const padding = { x: 60, y: 40 };
-  const usableW = svgWidth - padding.x * 2;
-  const usableH = svgHeight - padding.y * 2;
-  const maxNeurons = Math.max(...layerSizes);
-  const layerCount = layerSizes.length;
-
-  const positions = layerSizes.map((count, li) => {
-    const x = padding.x + (li / (layerCount - 1)) * usableW;
-    return Array.from({ length: count }, (_, ni) => {
-      const y = count === 1
-        ? svgHeight / 2
-        : padding.y + (ni / (count - 1)) * usableH;
-      return { x, y, layerIdx: li, neuronIdx: ni };
-    });
+  const pad = { x: 60, y: 40 };
+  const W   = svgWidth  - pad.x * 2;
+  const H   = svgHeight - pad.y * 2;
+  const L   = layerSizes.length;
+  return layerSizes.map((count, li) => {
+    const x = pad.x + (li / (L - 1)) * W;
+    return Array.from({ length: count }, (_, ni) => ({
+      x,
+      y: count === 1 ? svgHeight / 2 : pad.y + (ni / (count - 1)) * H,
+      layerIdx: li,
+      neuronIdx: ni,
+    }));
   });
+}
 
-  return positions;
+// =============================================================================
+// SECTION 13 — XOR EVALUATION
+// Runs inference on all 4 XOR samples using the current weights and returns
+// a verification table. This is the ground-truth check: if every sample is
+// classified correctly with high confidence, XOR is solved.
+//
+// "Confidence" here is distance from the 0.5 decision boundary, mapped to [0,1]:
+//   conf = |output − 0.5| × 2
+// So an output of 0.05 (class 0, far from boundary) → conf = 0.90 (90%).
+//
+// PyTorch equivalent (evaluation mode):
+//   model.eval()
+//   with torch.no_grad():
+//       preds = model(X_xor)
+//       correct = ((preds > 0.5).float() == y_xor).all()
+// =============================================================================
+function evaluateXOR(weights, biases, hiddenActivationTypes) {
+  const L = weights.length;
+  return XOR_DATA.map(({ input, label }) => {
+    const { activations, preActivations } = forwardPass(
+      input, weights, biases, hiddenActivationTypes
+    );
+    const rawOutput     = activations[L][0];           // p(class=1)
+    const predictedClass = rawOutput > 0.5 ? 1 : 0;
+    const confidence    = Math.abs(rawOutput - 0.5) * 2; // ∈ [0,1]
+    const correct       = predictedClass === label;
+    const eps           = 1e-12;
+    const p             = Math.max(eps, Math.min(1 - eps, rawOutput));
+    const sampleLoss    = -(label * Math.log(p) + (1 - label) * Math.log(1 - p));
+    return { input, label, rawOutput, predictedClass, confidence, correct, sampleLoss,
+             activations, preActivations };
+  });
+}
+
+// =============================================================================
+// SECTION 14 — CONVERGENCE / STOP CONDITIONS
+//
+// Why stop automatically?
+//   Once the XOR problem is solved, continuing to train serves no purpose.
+//   We want the tool to give a clear "done" signal rather than running forever.
+//
+// Two convergence criteria (either triggers a stop):
+//   1. Loss < 0.001 — the BCE loss is extremely low; the network has fit XOR.
+//   2. All 4 XOR samples correctly classified with confidence > 95% for
+//      CONVERGENCE_CONSECUTIVE_EPOCHS consecutive epochs — robust to cases where
+//      loss is low but not quite below the 0.001 threshold.
+//
+// Additional stopping conditions:
+//   3. Epoch count >= maxEpochs — safety ceiling, prevents infinite training.
+//   4. Plateau: loss has not improved by MIN_IMPROVEMENT or more in
+//      PLATEAU_PATIENCE epochs AND loss is still above CONVERGENCE_LOSS_THRESHOLD.
+//      This detects a stuck network without confusing it with a converged one.
+//
+// The plateau check explicitly requires loss > CONVERGENCE_LOSS_THRESHOLD so we
+// never surface "the model is stuck" when it has actually solved XOR.
+// =============================================================================
+const CONVERGENCE_LOSS_THRESHOLD      = 0.001;
+const CONVERGENCE_CONSECUTIVE_EPOCHS  = 50;
+const CONVERGENCE_CONFIDENCE          = 0.95;
+const PLATEAU_PATIENCE                = 100;  // epochs without meaningful improvement
+const MIN_IMPROVEMENT                 = 0.0005; // minimum loss delta to count as progress
+const PLATEAU_MIN_LOSS                = 0.05;   // only call it a plateau if loss is still this high
+
+function checkConvergence(loss, xorResults, consecutiveCorrect) {
+  if (loss < CONVERGENCE_LOSS_THRESHOLD) {
+    return { converged: true, reason: `Loss dropped below ${CONVERGENCE_LOSS_THRESHOLD} (current: ${loss.toFixed(6)})` };
+  }
+  const allHighConf = xorResults.every(r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE);
+  if (allHighConf && consecutiveCorrect >= CONVERGENCE_CONSECUTIVE_EPOCHS) {
+    return { converged: true, reason: `All 4 XOR points correctly classified with >${(CONVERGENCE_CONFIDENCE*100).toFixed(0)}% confidence for ${CONVERGENCE_CONSECUTIVE_EPOCHS} consecutive epochs` };
+  }
+  return { converged: false, reason: '' };
 }
 
 // =============================================================================
 // COMPONENT: NetworkGraph
-// Renders the MLP as an SVG with circles (neurons) and lines (weighted edges).
-// Colors neurons by activation magnitude and edges by gradient magnitude.
 // =============================================================================
 function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backpropData, animatingLayer }) {
-  const SVG_W = 520;
-  const SVG_H = 340;
-  const NEURON_R = 18;
-
+  const SVG_W = 520, SVG_H = 320, R = 18;
   const layout = computeLayout(layerSizes, SVG_W, SVG_H);
 
-  // Compute max gradient magnitude for edge color normalization
   let maxGradMag = 0;
   if (backpropData) {
-    for (const W of backpropData.dWeights) {
-      for (const row of W) {
-        for (const v of row) {
+    for (const W of backpropData.dWeights)
+      for (const row of W)
+        for (const v of row)
           if (Math.abs(v) > maxGradMag) maxGradMag = Math.abs(v);
-        }
-      }
-    }
   }
 
   return (
     <svg width={SVG_W} height={SVG_H} className="w-full h-full">
-      {/* Draw edges (connections between adjacent layers) */}
+      {/* Edges */}
       {layout.slice(0, -1).map((fromLayer, li) =>
         fromLayer.map((from, fi) =>
           layout[li + 1].map((to, ti) => {
-            // Determine edge color based on gradient (if backprop ran) or default gray
-            let edgeColor = 'rgba(148,163,184,0.15)';
-            let strokeW = 1;
-
-            if (backpropData && backpropData.dWeights[li]) {
-              const gradMag = Math.abs(backpropData.dWeights[li][ti][fi]);
-              edgeColor = gradientColor(gradMag, maxGradMag);
-              strokeW = 1 + 2 * (gradMag / (maxGradMag || 1));
+            let stroke = 'rgba(148,163,184,0.15)', sw = 1;
+            if (backpropData?.dWeights[li]) {
+              const m = Math.abs(backpropData.dWeights[li][ti][fi]);
+              stroke = gradientColor(m, maxGradMag);
+              sw = 1 + 2 * (m / (maxGradMag || 1));
             }
-
-            // Highlight edges in the currently animating layer
             const isActive = animatingLayer >= 0 && (li === animatingLayer - 1 || li === animatingLayer);
-            if (isActive) {
-              edgeColor = 'rgba(96,165,250,0.5)';
-              strokeW = 1.5;
-            }
-
+            if (isActive) { stroke = 'rgba(96,165,250,0.5)'; sw = 1.5; }
             return (
-              <line
-                key={`edge-${li}-${fi}-${ti}`}
-                x1={from.x} y1={from.y}
-                x2={to.x} y2={to.y}
-                stroke={edgeColor}
-                strokeWidth={strokeW}
-                className="edge-line"
-              />
+              <line key={`e-${li}-${fi}-${ti}`}
+                x1={from.x} y1={from.y} x2={to.x} y2={to.y}
+                stroke={stroke} strokeWidth={sw} className="edge-line" />
             );
           })
         )
       )}
 
-      {/* Draw neurons */}
+      {/* Neurons */}
       {layout.map((layer, li) =>
         layer.map((pos, ni) => {
-          // Get activation value for this neuron (if forward pass has run)
-          const actVal = forwardData?.activations?.[li]?.[ni];
-          const hasAct = actVal !== undefined;
-
-          // Determine fill color based on activation
-          let fillColor = '#1e293b'; // default dark
-          if (hasAct) {
-            fillColor = activationColor(actVal);
-          }
-
-          // Dim neurons beyond the currently animating layer
-          const isDimmed = animatingLayer >= 0 && li > animatingLayer;
-
-          // Layer label
-          let layerLabel = '';
-          if (li === 0) layerLabel = 'Input';
-          else if (li === layerSizes.length - 1) layerLabel = 'Output';
-          else {
-            const actType = hiddenActivationTypes[li - 1] || 'relu';
-            layerLabel = ACTIVATIONS[actType].label;
-          }
-
+          const actVal  = forwardData?.activations?.[li]?.[ni];
+          const hasAct  = actVal !== undefined;
+          const fill    = hasAct ? activationColor(actVal) : '#1e293b';
+          const dimmed  = animatingLayer >= 0 && li > animatingLayer;
+          const ringCol = li === 0 ? '#64748b'
+            : li === layerSizes.length - 1 ? '#f59e0b'
+            : ACTIVATIONS[hiddenActivationTypes[li - 1] || 'relu'].color;
           return (
-            <g key={`neuron-${li}-${ni}`} opacity={isDimmed ? 0.3 : 1}>
-              {/* Outer ring shows layer type */}
-              <circle
-                cx={pos.x} cy={pos.y} r={NEURON_R + 2}
-                fill="none"
-                stroke={li === 0 ? '#64748b' : li === layerSizes.length - 1 ? '#f59e0b' :
-                  ACTIVATIONS[hiddenActivationTypes[li - 1] || 'relu'].color}
-                strokeWidth={1}
-                opacity={0.5}
-              />
-              {/* Neuron body */}
-              <circle
-                cx={pos.x} cy={pos.y} r={NEURON_R}
-                fill={fillColor}
-                stroke={hasAct ? '#e2e8f0' : '#475569'}
-                strokeWidth={1.5}
-                className="neuron-circle"
-              />
-              {/* Activation value text */}
-              {hasAct && (
-                <text
-                  x={pos.x} y={pos.y + 1}
-                  textAnchor="middle" dominantBaseline="middle"
-                  fill="white" fontSize={9} fontWeight="bold"
-                  fontFamily="monospace"
-                >
+            <g key={`n-${li}-${ni}`} opacity={dimmed ? 0.3 : 1}>
+              <circle cx={pos.x} cy={pos.y} r={R+2} fill="none" stroke={ringCol} strokeWidth={1} opacity={0.5} />
+              <circle cx={pos.x} cy={pos.y} r={R} fill={fill}
+                stroke={hasAct ? '#e2e8f0' : '#475569'} strokeWidth={1.5} className="neuron-circle" />
+              {hasAct ? (
+                <text x={pos.x} y={pos.y+1} textAnchor="middle" dominantBaseline="middle"
+                  fill="white" fontSize={9} fontWeight="bold" fontFamily="monospace">
                   {actVal.toFixed(2)}
                 </text>
-              )}
-              {/* Neuron index (small, below) */}
-              {!hasAct && (
-                <text
-                  x={pos.x} y={pos.y + 1}
-                  textAnchor="middle" dominantBaseline="middle"
-                  fill="#94a3b8" fontSize={9}
-                >
-                  {li === 0 ? (ni === 0 ? 'x₁' : 'x₂') : `n${ni + 1}`}
+              ) : (
+                <text x={pos.x} y={pos.y+1} textAnchor="middle" dominantBaseline="middle"
+                  fill="#94a3b8" fontSize={9}>
+                  {li === 0 ? (ni === 0 ? 'x₁' : 'x₂') : `n${ni+1}`}
                 </text>
               )}
             </g>
@@ -597,31 +547,22 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
         })
       )}
 
-      {/* Layer labels at top */}
-      {layout.map((layer, li) => {
-        const x = layer[0].x;
-        let label = li === 0 ? 'Input (2)' : li === layerSizes.length - 1 ? 'Output (1)' :
-          `Hidden ${li} (${layerSizes[li]})`;
-        return (
-          <text key={`label-${li}`} x={x} y={16}
-            textAnchor="middle" fill="#94a3b8" fontSize={10}
-            fontFamily="sans-serif"
-          >
-            {label}
-          </text>
-        );
-      })}
+      {/* Layer labels */}
+      {layout.map((layer, li) => (
+        <text key={`lbl-${li}`} x={layer[0].x} y={14} textAnchor="middle" fill="#94a3b8" fontSize={10}>
+          {li === 0 ? 'Input(2)' : li === layerSizes.length-1 ? 'Output(1)' : `Hidden${li}(${layerSizes[li]})`}
+        </text>
+      ))}
 
-      {/* Gradient magnitude legend (if backprop data exists) */}
+      {/* Gradient legend */}
       {backpropData && (
-        <g transform="translate(10, 300)">
-          <text fill="#94a3b8" fontSize={9}>Gradient:</text>
-          {[0, 0.25, 0.5, 0.75, 1].map((t, i) => (
-            <rect key={i} x={55 + i * 12} y={-8} width={12} height={10}
-              fill={gradientColor(t, 1)} />
+        <g transform="translate(8,285)">
+          <text fill="#94a3b8" fontSize={9}>∂L/∂W:</text>
+          {[0,.25,.5,.75,1].map((t,i) => (
+            <rect key={i} x={48+i*12} y={-8} width={12} height={10} fill={gradientColor(t,1)} />
           ))}
-          <text x={55} y={12} fill="#94a3b8" fontSize={8}>0</text>
-          <text x={100} y={12} fill="#94a3b8" fontSize={8}>max</text>
+          <text x={48}  y={12} fill="#94a3b8" fontSize={8}>0</text>
+          <text x={92}  y={12} fill="#94a3b8" fontSize={8}>max</text>
         </g>
       )}
     </svg>
@@ -630,173 +571,316 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
 
 // =============================================================================
 // COMPONENT: DecisionBoundaryCanvas
-// Renders a 40×40 grid colored by the network's output probability.
-// Overlays the XOR training points.
-// This updates every time training changes the weights.
+// Every pixel in this canvas is colored by an ACTUAL forward pass through the
+// trained model. Nothing is interpolated or mocked. When training changes the
+// weights, React re-runs the effect and repaints the entire grid from scratch.
 // =============================================================================
 function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes, inferencePoint, onClick }) {
-  const canvasRef = useRef(null);
-  const GRID = 40;
-  const CANVAS_SIZE = 260;
-  const POINT_R = 7;
+  const canvasRef  = useRef(null);
+  const GRID       = 40;
+  const CANVAS_SZ  = 260;
+  const POINT_R    = 7;
 
   useEffect(() => {
     if (!weights || !canvasRef.current) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const cellSize = CANVAS_SIZE / GRID;
+    const ctx      = canvasRef.current.getContext('2d');
+    const cellSize = CANVAS_SZ / GRID;
 
-    // Compute and draw decision boundary grid
+    // Paint the decision boundary — each cell is one forward pass
     const grid = computeDecisionBoundary(weights, biases, hiddenActivationTypes, GRID);
-
+    ctx.clearRect(0, 0, CANVAS_SZ, CANVAS_SZ);
     for (let row = 0; row < GRID; row++) {
       for (let col = 0; col < GRID; col++) {
-        const prob = grid[row][col];
-        ctx.fillStyle = boundaryColor(prob);
+        ctx.fillStyle  = boundaryColor(grid[row][col]);
         ctx.globalAlpha = 0.6;
         ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
       }
     }
 
-    // Draw XOR training points on top
+    // XOR training points — cy = (1 − x₂)·H so that x₂=0 is at bottom
     ctx.globalAlpha = 1;
     for (const { input, label } of XOR_DATA) {
-      const cx = input[0] * CANVAS_SIZE;
-      const cy = (1 - input[1]) * CANVAS_SIZE; // flip y: y=0 at bottom in math, top in canvas
-
-      // Outer ring
-      ctx.beginPath();
-      ctx.arc(cx, cy, POINT_R + 2, 0, Math.PI * 2);
-      ctx.strokeStyle = 'white';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      // Fill: orange for class 1, blue for class 0
-      ctx.beginPath();
-      ctx.arc(cx, cy, POINT_R, 0, Math.PI * 2);
-      ctx.fillStyle = label === 1 ? '#f97316' : '#3b82f6';
-      ctx.fill();
-
-      // Label
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 9px monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      const cx = input[0] * CANVAS_SZ;
+      const cy = (1 - input[1]) * CANVAS_SZ;
+      ctx.beginPath(); ctx.arc(cx, cy, POINT_R+2, 0, Math.PI*2);
+      ctx.strokeStyle = 'white'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, POINT_R, 0, Math.PI*2);
+      ctx.fillStyle = label === 1 ? '#f97316' : '#3b82f6'; ctx.fill();
+      ctx.fillStyle = 'white'; ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(label.toString(), cx, cy);
     }
 
-    // Draw inference point if provided
+    // Inference point (if user clicked)
     if (inferencePoint) {
-      const cx = inferencePoint.x * CANVAS_SIZE;
-      const cy = (1 - inferencePoint.y) * CANVAS_SIZE;
-      const pred = inferencePoint.prediction;
-
-      ctx.beginPath();
-      ctx.arc(cx, cy, POINT_R + 3, 0, Math.PI * 2);
-      ctx.strokeStyle = '#fbbf24';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([3, 3]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      ctx.fillStyle = pred > 0.5 ? '#f97316' : '#3b82f6';
-      ctx.globalAlpha = 0.7;
-      ctx.beginPath();
-      ctx.arc(cx, cy, POINT_R, 0, Math.PI * 2);
-      ctx.fill();
+      const cx = inferencePoint.x * CANVAS_SZ;
+      const cy = (1 - inferencePoint.y) * CANVAS_SZ;
+      ctx.beginPath(); ctx.arc(cx, cy, POINT_R+4, 0, Math.PI*2);
+      ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 2;
+      ctx.setLineDash([3,3]); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = inferencePoint.prediction > 0.5 ? '#f97316' : '#3b82f6';
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath(); ctx.arc(cx, cy, POINT_R, 0, Math.PI*2); ctx.fill();
       ctx.globalAlpha = 1;
     }
 
-    // Axis labels
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('x₁: 0 → 1', CANVAS_SIZE / 2, CANVAS_SIZE - 4);
+    ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('x₁: 0 → 1', CANVAS_SZ/2, CANVAS_SZ-3);
   }, [weights, biases, hiddenActivationTypes, inferencePoint]);
 
   return (
     <div className="relative">
-      <canvas
-        ref={canvasRef}
-        width={CANVAS_SIZE}
-        height={CANVAS_SIZE}
-        className="rounded border border-slate-700 block cursor-crosshair"
+      <canvas ref={canvasRef} width={CANVAS_SZ} height={CANVAS_SZ}
+        className="rounded border border-slate-700 block"
         onClick={onClick}
-        style={{ cursor: onClick ? 'crosshair' : 'default' }}
-      />
-      <div className="absolute top-1 left-1 text-xs text-slate-500 font-mono pointer-events-none">
-        x₂ ↑
+        style={{ cursor: onClick ? 'crosshair' : 'default' }} />
+      <div className="absolute top-1 left-1 text-xs text-slate-500 font-mono pointer-events-none">x₂↑</div>
+    </div>
+  );
+}
+
+// =============================================================================
+// COMPONENT: XorVerifyPanel
+// Shows all 4 XOR inputs evaluated against the current model weights.
+// Values are computed by evaluateXOR() which calls forwardPass() for each
+// sample — the same function used during training. Nothing is cached from
+// a prior forward pass; this is always a fresh inference call.
+//
+// Confidence = |p − 0.5| × 2, so:
+//   p=0.97 → conf=0.94   (high confidence class 1)
+//   p=0.50 → conf=0.00   (right on the boundary, uncertain)
+//   p=0.05 → conf=0.90   (high confidence class 0)
+//
+// In PyTorch this corresponds to model.eval() + torch.no_grad() inference.
+// =============================================================================
+function XorVerifyPanel({ xorResults }) {
+  if (!xorResults) return (
+    <div className="text-xs text-slate-600 italic px-1">Train to see XOR verification</div>
+  );
+  const allCorrect = xorResults.every(r => r.correct);
+  const allHighConf = xorResults.every(r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE);
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">XOR Verify</span>
+        {allCorrect && (
+          <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${allHighConf ? 'bg-emerald-900/60 text-emerald-400' : 'bg-blue-900/60 text-blue-400'}`}>
+            {allHighConf ? '✓ Solved' : '✓ Correct'}
+          </span>
+        )}
+        {!allCorrect && (
+          <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/40 text-red-400">
+            {xorResults.filter(r => r.correct).length}/4 correct
+          </span>
+        )}
+      </div>
+      <table className="w-full text-xs font-mono border-collapse">
+        <thead>
+          <tr className="text-slate-600">
+            <th className="text-left pb-1">Input</th>
+            <th className="text-center pb-1">Exp</th>
+            <th className="text-right pb-1">p(1)</th>
+            <th className="text-center pb-1">→</th>
+            <th className="text-right pb-1">Conf</th>
+            <th className="text-center pb-1 w-4">✓</th>
+          </tr>
+        </thead>
+        <tbody>
+          {xorResults.map((r, i) => (
+            <tr key={i} className={`border-t border-slate-800 ${r.correct ? 'text-slate-300' : 'text-red-400'}`}>
+              <td className="py-0.5 pr-1">[{r.input.join(',')}]</td>
+              <td className="text-center">{r.label}</td>
+              <td className="text-right">{r.rawOutput.toFixed(3)}</td>
+              <td className="text-center text-slate-500">→</td>
+              <td className={`text-right ${r.confidence > CONVERGENCE_CONFIDENCE ? 'text-emerald-400' : r.confidence > 0.7 ? 'text-amber-400' : 'text-red-400'}`}>
+                {(r.confidence * 100).toFixed(0)}%
+              </td>
+              <td className="text-center">{r.correct ? '✓' : '✗'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// =============================================================================
+// COMPONENT: MathAuditPanel
+// Shows the full forward-pass computation for a selected XOR input:
+// pre-activations (z) and activations (a) at every layer, plus the final
+// output and per-sample BCE loss.
+//
+// These numbers MUST match what is displayed on the neurons during the
+// Forward Pass animation — they are produced by the same forwardPass() call.
+// If a neuron shows 0.73 in the visualization, the z and a values for that
+// neuron will appear here and should be consistent.
+//
+// This maps to PyTorch's intermediate tensors, which you can inspect with
+// hooks: model.register_forward_hook(lambda m, i, o: print(o))
+// =============================================================================
+function MathAuditPanel({ xorResults, hiddenActivationTypes, layerSizes }) {
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  if (!xorResults) return (
+    <div className="text-xs text-slate-600 italic">Train to see forward-pass audit</div>
+  );
+
+  const r = xorResults[selectedIdx];
+  const { activations, preActivations, input, label, rawOutput, sampleLoss } = r;
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Math Audit</span>
+        <div className="flex gap-1">
+          {XOR_DATA.map((d, i) => (
+            <button key={i} onClick={() => setSelectedIdx(i)}
+              className={`text-xs px-1.5 py-0.5 rounded font-mono transition-colors ${
+                i === selectedIdx ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+              }`}>
+              [{d.input.join(',')}]
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="text-xs font-mono space-y-1.5 bg-slate-900/60 rounded p-2">
+        {/* Input */}
+        <div className="text-slate-400">
+          <span className="text-slate-500">Input  </span>
+          x = [{input.join(', ')}]
+          <span className="text-slate-600 ml-1">(label={label})</span>
+        </div>
+
+        {/* Each layer's z and a */}
+        {activations.slice(1).map((a, li) => {
+          const z          = preActivations[li + 1];
+          const isOutput   = li === activations.length - 2;
+          const activType  = isOutput ? 'sigmoid' : (hiddenActivationTypes[li] || 'relu');
+          return (
+            <div key={li} className="border-t border-slate-800 pt-1.5">
+              <div className="text-slate-500 text-xs mb-0.5">
+                Layer {li + 1} ({isOutput ? 'output, sigmoid' : activType})
+              </div>
+              {/* Show z = W·x + b */}
+              <div className="text-indigo-300">
+                z = [{z.map(v => v.toFixed(4)).join(', ')}]
+              </div>
+              {/* Show a = activation(z) */}
+              <div className="text-blue-300">
+                a = [{a.map(v => v.toFixed(4)).join(', ')}]
+                {isOutput && <span className="text-slate-500 ml-1">← p(class=1)</span>}
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Per-sample loss */}
+        <div className="border-t border-slate-800 pt-1.5 text-amber-300">
+          loss = −({label}·log({rawOutput.toFixed(4)}) + {1-label}·log({(1-rawOutput).toFixed(4)}))
+          <span className="block text-amber-400 font-bold">     = {sampleLoss.toFixed(6)}</span>
+        </div>
+        <div className="text-slate-600 text-xs">
+          ↑ These z/a values match the network graph neurons above.
+        </div>
       </div>
     </div>
   );
 }
 
 // =============================================================================
+// COMPONENT: TrainingStatusBar
+// Shows the current training state prominently so the user always knows
+// whether training is running, has converged, plateaued, or hit max epochs.
+// =============================================================================
+function TrainingStatusBar({ status, epoch, loss, bestLoss, epochsSinceImprove, stopReason, maxEpochs }) {
+  const statusConfig = {
+    idle:      { label: 'Not Started',        color: 'text-slate-500',  bg: 'bg-slate-800/40',  dot: 'bg-slate-600' },
+    training:  { label: 'Training',           color: 'text-blue-400',   bg: 'bg-blue-900/20',   dot: 'bg-blue-400 animate-pulse' },
+    paused:    { label: 'Paused',             color: 'text-amber-400',  bg: 'bg-amber-900/20',  dot: 'bg-amber-400' },
+    converged: { label: 'Converged ✓',        color: 'text-emerald-400',bg: 'bg-emerald-900/20',dot: 'bg-emerald-400' },
+    plateaued: { label: 'Plateaued / Stuck',  color: 'text-orange-400', bg: 'bg-orange-900/20', dot: 'bg-orange-400' },
+    maxEpochs: { label: 'Max Epochs Reached', color: 'text-slate-400',  bg: 'bg-slate-800/60',  dot: 'bg-slate-500' },
+  };
+  const cfg = statusConfig[status] || statusConfig.idle;
+  return (
+    <div className={`${cfg.bg} border-b border-slate-700 px-5 py-1.5 flex items-center gap-6 text-xs`}>
+      <div className="flex items-center gap-2">
+        <span className={`w-2 h-2 rounded-full ${cfg.dot}`} />
+        <span className={`font-bold ${cfg.color}`}>{cfg.label}</span>
+      </div>
+      <div className="flex items-center gap-5 text-slate-400 font-mono">
+        <span>Epoch: <span className="text-slate-200">{epoch}</span></span>
+        {loss !== null && (
+          <span>Loss: <span className={`font-bold ${loss < 0.01 ? 'text-emerald-400' : loss < 0.1 ? 'text-amber-400' : 'text-red-400'}`}>{loss.toFixed(5)}</span></span>
+        )}
+        {bestLoss !== Infinity && (
+          <span>Best: <span className="text-emerald-300">{bestLoss.toFixed(5)}</span></span>
+        )}
+        {epoch > 0 && (
+          <span>No improv: <span className={epochsSinceImprove > 50 ? 'text-orange-400' : 'text-slate-400'}>{epochsSinceImprove}</span></span>
+        )}
+        {maxEpochs && (
+          <span className="text-slate-600">(max {maxEpochs})</span>
+        )}
+      </div>
+      {stopReason && (
+        <div className="ml-auto text-slate-500 truncate max-w-xs">{stopReason}</div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
 // COMPONENT: ConceptCallout
-// Surfaces explanatory text at key training moments.
 // =============================================================================
 function ConceptCallout({ type, onDismiss }) {
   const callouts = {
     firstForward: {
-      title: 'First Forward Pass',
-      color: 'border-blue-500',
-      icon: '→',
-      body: `Each neuron computes z = W·x + b, then a = activation(z).
-Values flow left to right. The output is a probability between 0 and 1 (sigmoid).`,
+      title: 'First Forward Pass', color: 'border-blue-500', icon: '→',
+      body: 'Each neuron computes z = W·x + b, then a = activation(z). Values flow left → right. The output is a probability in (0,1) via sigmoid.',
       pytorch: 'output = model(input_tensor)  # calls model.forward()',
     },
     firstBackprop: {
-      title: 'Backpropagation Running',
-      color: 'border-violet-500',
-      icon: '←',
-      body: `Gradients flow right to left. Each weight learns how much it contributed to the error.
-The chain rule multiplies local derivatives layer by layer.`,
+      title: 'Backpropagation Running', color: 'border-violet-500', icon: '←',
+      body: 'Gradients flow right → left. Each weight learns how much it contributed to the error. The chain rule multiplies local derivatives at each layer.',
       pytorch: 'loss.backward()  # PyTorch autograd computes all ∂L/∂W',
     },
     lossPlateauing: {
-      title: 'Loss Plateauing',
-      color: 'border-amber-500',
-      icon: '⚠',
-      body: `Loss stopped decreasing. Try: raising the learning rate, adding neurons/layers,
-or switching activation functions. XOR needs at least one hidden layer.`,
+      title: 'Loss Plateaued — Network is Stuck', color: 'border-orange-500', icon: '⚠',
+      body: `Loss has not meaningfully improved in ${PLATEAU_PATIENCE} epochs and is still above ${PLATEAU_MIN_LOSS}. Training stopped. Try: increasing the learning rate, adding neurons/layers, or switching activation functions.`,
       pytorch: '# Try: optimizer = torch.optim.Adam(model.parameters(), lr=0.01)',
     },
+    converged: {
+      title: 'XOR Solved ✓', color: 'border-emerald-500', icon: '✓',
+      body: 'The network correctly classifies all 4 XOR points with high confidence. Training stopped automatically. You can click anywhere on the boundary canvas to test inference.',
+      pytorch: `model.eval()\nwith torch.no_grad():\n    pred = model(test_input)`,
+    },
     vanishingGradient: {
-      title: 'Vanishing Gradient Detected',
-      color: 'border-red-500',
-      icon: '⚠',
-      body: `Gradients near the input layer are near zero. Sigmoid activations saturate —
-their derivative max is 0.25, so deep chains approach 0. Try ReLU instead.`,
+      title: 'Vanishing Gradient Detected', color: 'border-red-500', icon: '⚠',
+      body: 'Gradients near the input layer are near zero. Sigmoid derivatives max at 0.25 — deep sigmoid chains drive gradients toward 0. Try ReLU for hidden layers.',
       pytorch: '# Replace nn.Sigmoid() with nn.ReLU() in hidden layers',
     },
     inferencePoint: {
-      title: 'Inference Mode',
-      color: 'border-emerald-500',
-      icon: '◎',
-      body: `The network runs a forward pass on your test point using the trained weights.
-No gradients are computed — we only need the output probability.`,
-      pytorch: `model.eval()           # disable dropout/batchnorm training behavior
-with torch.no_grad():  # skip gradient tracking (saves memory)
-    pred = model(test_point)`,
+      title: 'Inference Mode', color: 'border-emerald-500', icon: '◎',
+      body: 'The network ran a forward pass on your test point using the current trained weights. No gradients were computed.',
+      pytorch: `model.eval()\nwith torch.no_grad():  # skip gradient tracking\n    pred = model(test_point)`,
     },
   };
 
   const c = callouts[type];
   if (!c) return null;
-
   return (
-    <div className={`border-l-4 ${c.color} bg-slate-800/80 rounded-r p-3 mb-3 text-sm`}>
+    <div className={`border-l-4 ${c.color} bg-slate-800/80 rounded-r p-3 text-sm`}>
       <div className="flex justify-between items-start">
         <span className="font-bold text-white flex items-center gap-2">
           <span>{c.icon}</span> {c.title}
         </span>
-        <button onClick={onDismiss} className="text-slate-500 hover:text-white ml-2">✕</button>
+        <button onClick={onDismiss} className="text-slate-500 hover:text-white ml-2 text-xs">✕</button>
       </div>
       <p className="text-slate-300 mt-1 text-xs leading-relaxed">{c.body}</p>
       {c.pytorch && (
-        <pre className="mt-2 text-xs bg-black/40 rounded p-2 text-emerald-400 overflow-x-auto">
-          {c.pytorch}
-        </pre>
+        <pre className="mt-2 text-xs bg-black/40 rounded p-2 text-emerald-400 overflow-x-auto">{c.pytorch}</pre>
       )}
     </div>
   );
@@ -804,20 +888,18 @@ with torch.no_grad():  # skip gradient tracking (saves memory)
 
 // =============================================================================
 // COMPONENT: PyTorchSidebar
-// Displays a live PyTorch code snippet reflecting the current network config.
 // =============================================================================
 function PyTorchSidebar({ layerSizes, hiddenActivationTypes }) {
-  const code = generatePyTorchCode(layerSizes, hiddenActivationTypes);
   return (
-    <div className="bg-gray-950 rounded-lg border border-slate-700 p-3 h-full overflow-auto">
-      <div className="flex items-center gap-2 mb-2">
-        <div className="w-3 h-3 rounded-full bg-red-500" />
-        <div className="w-3 h-3 rounded-full bg-yellow-500" />
-        <div className="w-3 h-3 rounded-full bg-green-500" />
-        <span className="text-slate-400 text-xs ml-2 font-mono">model.py</span>
+    <div className="bg-gray-950 rounded-lg border border-slate-700 p-3 flex-1 overflow-auto">
+      <div className="flex items-center gap-1.5 mb-2">
+        {['bg-red-500','bg-yellow-500','bg-green-500'].map((c,i) => (
+          <div key={i} className={`w-2.5 h-2.5 rounded-full ${c}`} />
+        ))}
+        <span className="text-slate-400 text-xs ml-1 font-mono">model.py</span>
       </div>
       <pre className="text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap">
-        {code}
+        {generatePyTorchCode(layerSizes, hiddenActivationTypes)}
       </pre>
     </div>
   );
@@ -827,414 +909,432 @@ function PyTorchSidebar({ layerSizes, hiddenActivationTypes }) {
 // MAIN APP COMPONENT
 // =============================================================================
 export default function App() {
-  // ---- Architecture Config ----
-  const [numHiddenLayers, setNumHiddenLayers] = useState(2);
-  const [neuronsPerLayer, setNeuronsPerLayer] = useState([4, 4]);
-  const [activationTypes, setActivationTypes] = useState(['relu', 'relu']);
+  // ── Architecture ──────────────────────────────────────────────────────────
+  const [numHiddenLayers,  setNumHiddenLayers]  = useState(2);
+  const [neuronsPerLayer,  setNeuronsPerLayer]   = useState([4, 4]);
+  const [activationTypes,  setActivationTypes]   = useState(['relu', 'relu']);
 
-  // ---- Network State ----
-  // { weights: [...], biases: [...] }
+  // ── Network weights ────────────────────────────────────────────────────────
   const [network, setNetwork] = useState(null);
 
-  // ---- Training State ----
-  const [isTraining, setIsTraining] = useState(false);
-  const [epoch, setEpoch] = useState(0);
-  const [lossHistory, setLossHistory] = useState([]);
-  const [learningRate, setLearningRate] = useState(0.1);
-  const [lastGradients, setLastGradients] = useState(null);
-  const [lastForwardData, setLastForwardData] = useState(null);
+  // ── Training state (React display) ────────────────────────────────────────
+  const [isTraining,            setIsTraining]            = useState(false);
+  const [trainingStatus,        setTrainingStatus]        = useState('idle');
+  // 'idle' | 'training' | 'paused' | 'converged' | 'plateaued' | 'maxEpochs'
+  const [stopReason,            setStopReason]            = useState('');
+  const [epoch,                 setEpoch]                 = useState(0);
+  const [lossHistory,           setLossHistory]           = useState([]);
+  const [learningRate,          setLearningRate]          = useState(0.1);
+  const [bestLoss,              setBestLoss]              = useState(Infinity);
+  const [epochsSinceImprovement,setEpochsSinceImprovement] = useState(0);
+  const [maxEpochs,             setMaxEpochs]             = useState(10000);
+  const [lastGradients,         setLastGradients]         = useState(null);
+  const [lastForwardData,       setLastForwardData]       = useState(null);
+  const [xorResults,            setXorResults]            = useState(null);
 
-  // ---- Animation ----
-  const [animatingLayer, setAnimatingLayer] = useState(-1);
-  const [forwardPassDisplay, setForwardPassDisplay] = useState(null);
+  // ── Animation ─────────────────────────────────────────────────────────────
+  const [animatingLayer,    setAnimatingLayer]    = useState(-1);
+  const [forwardPassDisplay,setForwardPassDisplay] = useState(null);
 
-  // ---- Inference ----
+  // ── Inference ─────────────────────────────────────────────────────────────
   const [inferencePoint, setInferencePoint] = useState(null);
 
-  // ---- Concept Callouts ----
-  const [callouts, setCallouts] = useState(new Set());
-  const [dismissedCallouts, setDismissedCallouts] = useState(new Set());
+  // ── Concept callouts ───────────────────────────────────────────────────────
+  const [callouts,         setCallouts]         = useState(new Set());
+  const [dismissedCallouts,setDismissedCallouts] = useState(new Set());
 
-  // Refs for training loop
-  const trainingRef = useRef(false);
-  const networkRef = useRef(null);
-  const epochRef = useRef(0);
-  const lossHistoryRef = useRef([]);
+  // ── Refs (used inside RAF loop to avoid stale closures) ────────────────────
+  const trainingRef              = useRef(false);
+  const networkRef               = useRef(null);
+  const epochRef                 = useRef(0);
+  const lossHistoryRef           = useRef([]);
+  const bestLossRef              = useRef(Infinity);
+  const epochsSinceImprovRef     = useRef(0);
+  const consecutiveCorrectRef    = useRef(0);
+  const maxEpochsRef             = useRef(10000);
+  const dismissedCalloutsRef     = useRef(new Set());
+  const trainingLoopRef          = useRef(null);
 
-  // Derived layer sizes: [2, ...hidden..., 1]
+  // Keep dismissedCalloutsRef in sync with React state
+  useEffect(() => { dismissedCalloutsRef.current = dismissedCallouts; }, [dismissedCallouts]);
+  useEffect(() => { maxEpochsRef.current = maxEpochs; }, [maxEpochs]);
+
+  // Derived layer sizes: [2, …hidden neurons…, 1]
   const layerSizes = [2, ...neuronsPerLayer.slice(0, numHiddenLayers), 1];
 
-  // ---- Initialize network when architecture changes ----
+  // ── Network initialization ─────────────────────────────────────────────────
   const initializeNetwork = useCallback(() => {
-    const net = initNetwork(layerSizes);
+    if (trainingLoopRef.current) cancelAnimationFrame(trainingLoopRef.current);
+    trainingRef.current          = false;
+    const net                    = initNetwork(layerSizes);
+    networkRef.current           = net;
+    epochRef.current             = 0;
+    lossHistoryRef.current       = [];
+    bestLossRef.current          = Infinity;
+    epochsSinceImprovRef.current = 0;
+    consecutiveCorrectRef.current = 0;
+
     setNetwork(net);
-    networkRef.current = net;
+    setIsTraining(false);
+    setTrainingStatus('idle');
+    setStopReason('');
     setEpoch(0);
-    epochRef.current = 0;
     setLossHistory([]);
-    lossHistoryRef.current = [];
+    setBestLoss(Infinity);
+    setEpochsSinceImprovement(0);
     setLastGradients(null);
     setLastForwardData(null);
     setForwardPassDisplay(null);
     setInferencePoint(null);
-    setIsTraining(false);
-    trainingRef.current = false;
+    setXorResults(null);
     setCallouts(new Set());
   }, [layerSizes.join(',')]);
 
-  // Initialize on mount
-  useEffect(() => {
-    initializeNetwork();
-  }, []);
+  useEffect(() => { initializeNetwork(); }, []); // mount
 
-  // Re-init when architecture changes (but not on first mount)
+  // Re-init when architecture changes
   const prevArchRef = useRef(null);
   useEffect(() => {
-    const archKey = layerSizes.join(',') + activationTypes.join(',');
-    if (prevArchRef.current !== null && prevArchRef.current !== archKey) {
-      initializeNetwork();
-    }
-    prevArchRef.current = archKey;
+    const key = layerSizes.join(',') + '|' + activationTypes.join(',');
+    if (prevArchRef.current !== null && prevArchRef.current !== key) initializeNetwork();
+    prevArchRef.current = key;
   }, [layerSizes.join(','), activationTypes.join(',')]);
 
-  // ---- Architecture change handlers ----
+  // ── Architecture handlers ──────────────────────────────────────────────────
   const handleNumHiddenLayersChange = (n) => {
-    const clamped = Math.max(1, Math.min(4, n));
-    setNumHiddenLayers(clamped);
-    setNeuronsPerLayer(prev => {
-      const next = [...prev];
-      while (next.length < clamped) next.push(4);
-      return next.slice(0, clamped);
-    });
-    setActivationTypes(prev => {
-      const next = [...prev];
-      while (next.length < clamped) next.push('relu');
-      return next.slice(0, clamped);
-    });
+    const c = Math.max(1, Math.min(4, n));
+    setNumHiddenLayers(c);
+    setNeuronsPerLayer(prev => { const a = [...prev]; while (a.length < c) a.push(4); return a.slice(0,c); });
+    setActivationTypes(prev => { const a = [...prev]; while (a.length < c) a.push('relu'); return a.slice(0,c); });
   };
+  const handleNeuronsChange    = (i, n) => setNeuronsPerLayer(prev => { const a=[...prev]; a[i]=Math.max(2,Math.min(8,n)); return a; });
+  const handleActivationChange = (i, t) => setActivationTypes(prev => { const a=[...prev]; a[i]=t; return a; });
 
-  const handleNeuronsChange = (layerIdx, n) => {
-    setNeuronsPerLayer(prev => {
-      const next = [...prev];
-      next[layerIdx] = Math.max(2, Math.min(8, n));
-      return next;
-    });
-  };
-
-  const handleActivationChange = (layerIdx, type) => {
-    setActivationTypes(prev => {
-      const next = [...prev];
-      next[layerIdx] = type;
-      return next;
-    });
-  };
-
-  // ---- Forward Pass Animation ----
-  const runForwardPassAnimation = useCallback(async () => {
-    if (!networkRef.current) return;
-    const { weights, biases } = networkRef.current;
-    const input = XOR_DATA[0].input; // animate on first XOR sample [0,0]
-
-    // Run the full forward pass to get all values
-    const { activations, preActivations } = forwardPass(
-      input, weights, biases, activationTypes
-    );
-
-    // Show trigger callout
-    if (!dismissedCallouts.has('firstForward')) {
-      setCallouts(prev => new Set([...prev, 'firstForward']));
-    }
-
-    // Animate layer by layer
-    for (let l = 0; l <= layerSizes.length - 1; l++) {
-      setAnimatingLayer(l);
-      // Show activations up to layer l
-      const partial = { activations: activations.slice(0, l + 1), preActivations };
-      setForwardPassDisplay(partial);
-      await new Promise(r => setTimeout(r, 500));
-    }
-
-    setAnimatingLayer(-1);
-    setForwardPassDisplay({ activations, preActivations });
-    setLastForwardData({ activations, preActivations });
-  }, [activationTypes, layerSizes.length, dismissedCallouts]);
-
-  // ---- Training Loop ----
+  // ── Core training step (called from RAF loop) ─────────────────────────────
+  // Returns { shouldStop: bool } so the loop knows when to halt.
   const runTrainingStep = useCallback(() => {
-    if (!networkRef.current) return;
-    const { weights, biases } = networkRef.current;
+    if (!networkRef.current) return { shouldStop: false };
 
+    // ① Check max-epoch ceiling BEFORE running the epoch
+    if (epochRef.current >= maxEpochsRef.current) {
+      const reason = `Reached maximum of ${maxEpochsRef.current} epochs`;
+      setTrainingStatus('maxEpochs');
+      setStopReason(reason);
+      return { shouldStop: true };
+    }
+
+    const { weights, biases } = networkRef.current;
     const result = trainOneEpoch(weights, biases, activationTypes, learningRate);
 
+    // Update network weights
     networkRef.current = { weights: result.weights, biases: result.biases };
     setNetwork({ weights: result.weights, biases: result.biases });
 
+    // Increment epoch counter
     epochRef.current += 1;
     setEpoch(epochRef.current);
 
-    const lossEntry = { epoch: epochRef.current, loss: result.loss };
-    lossHistoryRef.current = [...lossHistoryRef.current, lossEntry];
-    // Keep last 200 points for display
-    if (lossHistoryRef.current.length > 200) {
-      lossHistoryRef.current = lossHistoryRef.current.slice(-200);
-    }
+    // Append to loss history (keep last 200 for performance)
+    lossHistoryRef.current = [...lossHistoryRef.current,
+      { epoch: epochRef.current, loss: result.loss }].slice(-200);
     setLossHistory([...lossHistoryRef.current]);
-    setLastGradients({ dWeights: result.avgDW, dBiases: result.avgDB });
-    setLastForwardData(result.allForwardData[0]); // first XOR sample for display
 
-    // Trigger callouts
-    if (epochRef.current === 1 && !dismissedCallouts.has('firstBackprop')) {
+    setLastGradients({ dWeights: result.avgDW, dBiases: result.avgDB });
+    setLastForwardData(result.allForwardData[0]); // first XOR sample for network graph
+
+    // ② Track best loss and epochs-since-improvement
+    // "Improvement" requires at least MIN_IMPROVEMENT decrease to filter noise.
+    if (result.loss < bestLossRef.current - MIN_IMPROVEMENT) {
+      bestLossRef.current          = result.loss;
+      epochsSinceImprovRef.current = 0;
+      setBestLoss(result.loss);
+    } else {
+      epochsSinceImprovRef.current += 1;
+    }
+    setEpochsSinceImprovement(epochsSinceImprovRef.current);
+
+    // ③ Evaluate all 4 XOR samples with current weights (real inference calls)
+    const xorEval = evaluateXOR(result.weights, result.biases, activationTypes);
+    setXorResults(xorEval);
+
+    // ④ Track consecutive epochs where all 4 points are correct + high-confidence
+    const allHighConf = xorEval.every(r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE);
+    if (allHighConf) consecutiveCorrectRef.current += 1;
+    else             consecutiveCorrectRef.current  = 0;
+
+    // ⑤ Check convergence (either criterion)
+    const { converged, reason } = checkConvergence(
+      result.loss, xorEval, consecutiveCorrectRef.current
+    );
+    if (converged) {
+      setTrainingStatus('converged');
+      setStopReason(reason);
+      if (!dismissedCalloutsRef.current.has('converged')) {
+        setCallouts(prev => new Set([...prev, 'converged']));
+      }
+      return { shouldStop: true };
+    }
+
+    // ⑥ Plateau detection — only fires when loss is STILL high (not near convergence).
+    // This prevents showing "stuck" when the model has actually solved XOR at a loss
+    // slightly above the hard 0.001 threshold but with correct classifications.
+    if (
+      result.loss > PLATEAU_MIN_LOSS &&
+      epochsSinceImprovRef.current >= PLATEAU_PATIENCE &&
+      !dismissedCalloutsRef.current.has('lossPlateauing')
+    ) {
+      setTrainingStatus('plateaued');
+      setStopReason(`Loss has not improved by >${MIN_IMPROVEMENT} in ${PLATEAU_PATIENCE} epochs`);
+      setCallouts(prev => new Set([...prev, 'lossPlateauing']));
+      return { shouldStop: true };
+    }
+
+    // ⑦ One-time informational callouts
+    if (epochRef.current === 1 && !dismissedCalloutsRef.current.has('firstBackprop')) {
       setCallouts(prev => new Set([...prev, 'firstBackprop']));
     }
 
-    // Detect loss plateauing (loss hasn't changed much in last 20 epochs)
-    const hist = lossHistoryRef.current;
-    if (hist.length > 20 && !dismissedCallouts.has('lossPlateauing')) {
-      const recent = hist.slice(-20);
-      const delta = Math.abs(recent[0].loss - recent[recent.length - 1].loss);
-      if (delta < 0.005 && result.loss > 0.1) {
-        setCallouts(prev => new Set([...prev, 'lossPlateauing']));
-      }
-    }
-
-    // Detect vanishing gradient: check if input-layer gradients are tiny
-    const firstLayerGrads = result.avgDW[0];
-    const maxFirstGrad = Math.max(...firstLayerGrads.flat().map(Math.abs));
-    const maxAnyGrad = Math.max(...result.avgDW.flat().flat().map(Math.abs));
-    if (maxAnyGrad > 0 && maxFirstGrad / maxAnyGrad < 0.01 && !dismissedCallouts.has('vanishingGradient')) {
+    // Vanishing gradient: first-layer max gradient is <1% of network-wide max gradient
+    const firstMax = Math.max(...result.avgDW[0].flat().map(Math.abs));
+    const anyMax   = Math.max(...result.avgDW.flat(2).map(Math.abs));
+    if (anyMax > 0 && firstMax / anyMax < 0.01 && !dismissedCalloutsRef.current.has('vanishingGradient')) {
       setCallouts(prev => new Set([...prev, 'vanishingGradient']));
     }
 
-    return result.loss;
-  }, [activationTypes, learningRate, dismissedCallouts]);
+    return { shouldStop: false };
+  }, [activationTypes, learningRate]); // note: dismissedCallouts accessed via ref
 
-  // Training loop using requestAnimationFrame
-  const trainingLoopRef = useRef(null);
+  // ── RAF training loop ──────────────────────────────────────────────────────
+  // Runs STEPS_PER_FRAME epochs per animation frame for speed, but checks for
+  // stop conditions after every individual epoch.
+  const STEPS_PER_FRAME = 5;
+
   useEffect(() => {
     if (!isTraining) {
       if (trainingLoopRef.current) cancelAnimationFrame(trainingLoopRef.current);
       return;
     }
-
-    let lastTime = 0;
-    const STEPS_PER_FRAME = 5; // run several epochs per animation frame for speed
-
-    const loop = (timestamp) => {
+    trainingRef.current = true;
+    const loop = () => {
       if (!trainingRef.current) return;
       for (let i = 0; i < STEPS_PER_FRAME; i++) {
-        runTrainingStep();
+        const { shouldStop } = runTrainingStep();
+        if (shouldStop) {
+          trainingRef.current = false;
+          setIsTraining(false);
+          return; // do not schedule next frame
+        }
       }
       trainingLoopRef.current = requestAnimationFrame(loop);
     };
-
-    trainingRef.current = true;
     trainingLoopRef.current = requestAnimationFrame(loop);
-    return () => {
-      if (trainingLoopRef.current) cancelAnimationFrame(trainingLoopRef.current);
-    };
+    return () => { if (trainingLoopRef.current) cancelAnimationFrame(trainingLoopRef.current); };
   }, [isTraining, runTrainingStep]);
 
+  // ── Control handlers ────────────────────────────────────────────────────────
   const handleToggleTraining = () => {
     if (isTraining) {
       trainingRef.current = false;
       setIsTraining(false);
+      setTrainingStatus('paused');
     } else {
+      setTrainingStatus('training');
+      setStopReason('');
       setIsTraining(true);
     }
   };
 
   const handleStepEpoch = () => {
     if (isTraining) return;
-    runTrainingStep();
+    const { shouldStop } = runTrainingStep();
+    if (shouldStop) { setIsTraining(false); }
+    else { setTrainingStatus('paused'); }
   };
 
-  const handleReset = () => {
-    trainingRef.current = false;
-    setIsTraining(false);
-    initializeNetwork();
-  };
+  const handleReset = () => { initializeNetwork(); };
 
-  // ---- Inference: click on boundary canvas ----
+  // ── Forward-pass animation ─────────────────────────────────────────────────
+  const runForwardPassAnimation = useCallback(async () => {
+    if (!networkRef.current || isTraining) return;
+    const { weights, biases } = networkRef.current;
+    const input = XOR_DATA[0].input;
+    const { activations, preActivations } = forwardPass(input, weights, biases, activationTypes);
+    if (!dismissedCalloutsRef.current.has('firstForward')) {
+      setCallouts(prev => new Set([...prev, 'firstForward']));
+    }
+    for (let l = 0; l <= layerSizes.length - 1; l++) {
+      setAnimatingLayer(l);
+      setForwardPassDisplay({ activations: activations.slice(0, l + 1), preActivations });
+      await new Promise(r => setTimeout(r, 450));
+    }
+    setAnimatingLayer(-1);
+    setForwardPassDisplay({ activations, preActivations });
+    setLastForwardData({ activations, preActivations });
+  }, [activationTypes, layerSizes.length, isTraining]);
+
+  // ── Click-to-infer on the boundary canvas ─────────────────────────────────
   const handleCanvasClick = (e) => {
     if (!networkRef.current) return;
     const canvas = e.currentTarget;
-    const rect = canvas.getBoundingClientRect();
-    const CANVAS_SIZE = 260;
-    const cx = (e.clientX - rect.left) / rect.width;
-    const cy = (e.clientY - rect.top) / rect.height;
-    // Convert canvas coordinates to [0,1] input space
-    const x1 = cx;
-    const x2 = 1 - cy; // flip y
-
+    const rect   = canvas.getBoundingClientRect();
+    const x1     = (e.clientX - rect.left) / rect.width;
+    const cy     = (e.clientY - rect.top)  / rect.height;
+    const x2     = 1 - cy; // flip: canvas top = x₂=1
     const { weights, biases } = networkRef.current;
-    const { activations } = forwardPass([x1, x2], weights, biases, activationTypes);
-    const prediction = activations[activations.length - 1][0];
-
+    const { activations }     = forwardPass([x1, x2], weights, biases, activationTypes);
+    const prediction          = activations[activations.length - 1][0];
     setInferencePoint({ x: x1, y: x2, prediction });
-
-    if (!dismissedCallouts.has('inferencePoint')) {
+    if (!dismissedCalloutsRef.current.has('inferencePoint')) {
       setCallouts(prev => new Set([...prev, 'inferencePoint']));
     }
   };
 
-  // ---- Dismiss callout ----
   const dismissCallout = (type) => {
-    setCallouts(prev => { const s = new Set(prev); s.delete(type); return s; });
+    setCallouts(prev       => { const s = new Set(prev);        s.delete(type); return s; });
     setDismissedCallouts(prev => new Set([...prev, type]));
   };
 
-  // Latest loss for display
-  const latestLoss = lossHistory.length > 0 ? lossHistory[lossHistory.length - 1].loss : null;
-
-  // Active callouts to show (max 2 at once to avoid clutter)
+  // Derived display values
+  const latestLoss    = lossHistory.length > 0 ? lossHistory[lossHistory.length - 1].loss : null;
   const activeCallouts = [...callouts].filter(c => !dismissedCallouts.has(c)).slice(0, 2);
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans">
-      {/* Header */}
-      <header className="border-b border-slate-700 px-6 py-3 flex items-center justify-between">
+    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans flex flex-col">
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <header className="border-b border-slate-700 px-5 py-2.5 flex items-center justify-between flex-shrink-0">
         <div>
-          <h1 className="text-lg font-bold text-white">Neural Network Learning Tool</h1>
-          <p className="text-xs text-slate-400">Phase 1 MVP — real math, XOR dataset</p>
+          <h1 className="text-base font-bold text-white leading-tight">Neural Network Learning Tool</h1>
+          <p className="text-xs text-slate-500">Phase 1 Hardened — real math, XOR, self-validating</p>
         </div>
-        <div className="flex items-center gap-4 text-sm">
-          {latestLoss !== null && (
-            <span className="font-mono">
-              Loss: <span className={`font-bold ${latestLoss < 0.1 ? 'text-emerald-400' : latestLoss < 0.3 ? 'text-amber-400' : 'text-red-400'}`}>
-                {latestLoss.toFixed(4)}
-              </span>
-            </span>
-          )}
-          <span className="text-slate-500 font-mono">Epoch: {epoch}</span>
+        <div className="text-xs text-slate-500 font-mono">
+          {layerSizes.join(' → ')}
         </div>
       </header>
 
-      <div className="flex h-[calc(100vh-56px)]">
-        {/* ================================================================
-            LEFT PANEL — Architecture Config + Controls
-        ================================================================ */}
-        <div className="w-56 border-r border-slate-700 p-4 flex flex-col gap-4 overflow-y-auto">
+      {/* ── Training Status Bar ────────────────────────────────────────────── */}
+      <TrainingStatusBar
+        status={trainingStatus}
+        epoch={epoch}
+        loss={latestLoss}
+        bestLoss={bestLoss}
+        epochsSinceImprove={epochsSinceImprovement}
+        stopReason={stopReason}
+        maxEpochs={maxEpochs}
+      />
+
+      {/* ── Three-column body ─────────────────────────────────────────────── */}
+      <div className="flex flex-1 min-h-0">
+        {/* ═══════════════════════════════════════════════════════════════════
+            LEFT PANEL — Architecture + Training Controls
+        ═══════════════════════════════════════════════════════════════════ */}
+        <div className="w-52 border-r border-slate-700 p-3 flex flex-col gap-3 overflow-y-auto flex-shrink-0">
+          {/* Architecture */}
           <section>
-            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Architecture</h2>
-
-            <label className="block mb-3">
-              <span className="text-xs text-slate-400">Hidden Layers</span>
-              <div className="flex items-center gap-2 mt-1">
-                <button onClick={() => handleNumHiddenLayersChange(numHiddenLayers - 1)}
-                  className="w-6 h-6 rounded bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">−</button>
-                <span className="font-mono text-white w-4 text-center">{numHiddenLayers}</span>
-                <button onClick={() => handleNumHiddenLayersChange(numHiddenLayers + 1)}
-                  className="w-6 h-6 rounded bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold">+</button>
-              </div>
-            </label>
-
+            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Architecture</h2>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs text-slate-400 flex-1">Hidden Layers</span>
+              <button onClick={() => handleNumHiddenLayersChange(numHiddenLayers-1)}
+                className="w-5 h-5 rounded bg-slate-700 hover:bg-slate-600 text-sm font-bold">−</button>
+              <span className="font-mono text-white w-4 text-center text-sm">{numHiddenLayers}</span>
+              <button onClick={() => handleNumHiddenLayersChange(numHiddenLayers+1)}
+                className="w-5 h-5 rounded bg-slate-700 hover:bg-slate-600 text-sm font-bold">+</button>
+            </div>
             {Array.from({ length: numHiddenLayers }, (_, i) => (
-              <div key={i} className="mb-3 pl-2 border-l-2 border-slate-700">
-                <div className="text-xs text-slate-400 mb-1">Layer {i + 1}</div>
+              <div key={i} className="mb-2 pl-2 border-l-2 border-slate-700">
+                <div className="text-xs text-slate-500 mb-1">Layer {i+1}</div>
                 <div className="flex items-center gap-1 mb-1">
-                  <span className="text-xs text-slate-500">Neurons:</span>
-                  <button onClick={() => handleNeuronsChange(i, neuronsPerLayer[i] - 1)}
+                  <span className="text-xs text-slate-600 flex-1">Neurons</span>
+                  <button onClick={() => handleNeuronsChange(i, neuronsPerLayer[i]-1)}
                     className="w-5 h-5 rounded bg-slate-700 hover:bg-slate-600 text-xs">−</button>
                   <span className="font-mono text-white text-xs w-4 text-center">{neuronsPerLayer[i]}</span>
-                  <button onClick={() => handleNeuronsChange(i, neuronsPerLayer[i] + 1)}
+                  <button onClick={() => handleNeuronsChange(i, neuronsPerLayer[i]+1)}
                     className="w-5 h-5 rounded bg-slate-700 hover:bg-slate-600 text-xs">+</button>
                 </div>
-                <select
-                  value={activationTypes[i]}
-                  onChange={e => handleActivationChange(i, e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-600 rounded text-xs text-white p-1"
-                >
+                <select value={activationTypes[i]} onChange={e => handleActivationChange(i, e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-600 rounded text-xs text-white p-0.5">
                   <option value="relu">ReLU</option>
                   <option value="tanh">Tanh</option>
                   <option value="sigmoid">Sigmoid</option>
                 </select>
               </div>
             ))}
-
-            <div className="text-xs text-slate-500 mt-1 font-mono">
-              Architecture: {layerSizes.join(' → ')}
-            </div>
           </section>
 
+          {/* Training controls */}
           <section>
-            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Training</h2>
-
-            <label className="block mb-3">
-              <span className="text-xs text-slate-400">Learning Rate: {learningRate.toFixed(3)}</span>
-              <input
-                type="range" min="0.001" max="1" step="0.001"
-                value={learningRate}
+            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Training</h2>
+            <label className="block mb-2">
+              <span className="text-xs text-slate-400">LR: {learningRate.toFixed(3)}</span>
+              <input type="range" min="0.001" max="1" step="0.001" value={learningRate}
                 onChange={e => setLearningRate(parseFloat(e.target.value))}
-                className="w-full mt-1 accent-blue-500"
-              />
-              <div className="flex justify-between text-xs text-slate-600 mt-0.5">
-                <span>0.001</span><span>1.0</span>
+                className="w-full mt-0.5 accent-blue-500" />
+            </label>
+
+            {/* Max epochs */}
+            <label className="block mb-2">
+              <span className="text-xs text-slate-400">Max Epochs</span>
+              <div className="flex gap-1 mt-0.5">
+                {[1000, 5000, 10000, 50000].map(v => (
+                  <button key={v} onClick={() => setMaxEpochs(v)}
+                    className={`text-xs px-1.5 py-0.5 rounded flex-1 transition-colors ${
+                      maxEpochs === v ? 'bg-blue-700 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                    }`}>
+                    {v >= 1000 ? `${v/1000}k` : v}
+                  </button>
+                ))}
               </div>
             </label>
 
-            <div className="flex flex-col gap-2">
-              <button
-                onClick={handleToggleTraining}
-                className={`w-full py-2 rounded font-bold text-sm transition-colors ${
-                  isTraining
-                    ? 'bg-amber-600 hover:bg-amber-500 text-white'
-                    : 'bg-blue-600 hover:bg-blue-500 text-white'
-                }`}
-              >
-                {isTraining ? '⏸ Pause' : '▶ Train'}
+            <div className="flex flex-col gap-1.5">
+              <button onClick={handleToggleTraining}
+                className={`w-full py-1.5 rounded font-bold text-sm transition-colors ${
+                  isTraining ? 'bg-amber-600 hover:bg-amber-500' : 'bg-blue-600 hover:bg-blue-500'
+                } text-white`}>
+                {isTraining ? '⏸ Pause' : trainingStatus === 'converged' ? '▶ Continue' : '▶ Train'}
               </button>
-
-              <button
-                onClick={handleStepEpoch}
-                disabled={isTraining}
-                className="w-full py-1.5 rounded text-sm bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
+              <button onClick={handleStepEpoch} disabled={isTraining}
+                className="w-full py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed">
                 Step 1 Epoch
               </button>
-
-              <button
-                onClick={runForwardPassAnimation}
-                disabled={isTraining}
-                className="w-full py-1.5 rounded text-sm bg-slate-700 hover:bg-slate-600 disabled:opacity-40"
-              >
-                Forward Pass
+              <button onClick={runForwardPassAnimation} disabled={isTraining}
+                className="w-full py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-40">
+                Forward Pass ▶
               </button>
-
-              <button
-                onClick={handleReset}
-                className="w-full py-1.5 rounded text-sm bg-slate-800 hover:bg-red-900/50 text-slate-400 hover:text-red-300 border border-slate-700"
-              >
+              <button onClick={handleReset}
+                className="w-full py-1 rounded text-xs bg-slate-800 hover:bg-red-900/50 text-slate-400 hover:text-red-300 border border-slate-700">
                 Reset
               </button>
             </div>
           </section>
 
-          {/* Inference instructions */}
-          <section className="mt-auto">
+          {/* Inference result */}
+          <section>
             <div className="text-xs text-slate-500 bg-slate-800/50 rounded p-2">
-              <span className="text-slate-400 font-medium block mb-1">Inference Mode</span>
-              Click anywhere on the decision boundary to predict that point.
+              <span className="text-slate-400 font-medium block mb-1">Click to Infer</span>
+              Click the decision boundary canvas to run inference at that point.
             </div>
             {inferencePoint && (
-              <div className="mt-2 text-xs font-mono bg-slate-800 rounded p-2">
-                <div>x₁={inferencePoint.x.toFixed(2)} x₂={inferencePoint.y.toFixed(2)}</div>
+              <div className="mt-1.5 text-xs font-mono bg-slate-800 rounded p-2 space-y-0.5">
+                <div className="text-slate-400">x₁={inferencePoint.x.toFixed(3)} x₂={inferencePoint.y.toFixed(3)}</div>
                 <div className={inferencePoint.prediction > 0.5 ? 'text-orange-400' : 'text-blue-400'}>
                   Class: {inferencePoint.prediction > 0.5 ? 1 : 0}
                 </div>
-                <div>Conf: {(Math.abs(inferencePoint.prediction - 0.5) * 2 * 100).toFixed(0)}%</div>
-                <div>p(1)={inferencePoint.prediction.toFixed(3)}</div>
+                <div className="text-slate-300">p(1) = {inferencePoint.prediction.toFixed(4)}</div>
+                <div className="text-slate-400">
+                  conf = {(Math.abs(inferencePoint.prediction - 0.5)*2*100).toFixed(1)}%
+                </div>
               </div>
             )}
           </section>
         </div>
 
-        {/* ================================================================
-            CENTER PANEL — Network Graph + Decision Boundary
-        ================================================================ */}
-        <div className="flex-1 flex flex-col p-4 gap-4 overflow-hidden">
+        {/* ═══════════════════════════════════════════════════════════════════
+            CENTER PANEL — Network Graph + Boundary + Loss Curve
+        ═══════════════════════════════════════════════════════════════════ */}
+        <div className="flex-1 flex flex-col p-3 gap-3 min-w-0 overflow-hidden">
           {/* Callouts */}
           {activeCallouts.length > 0 && (
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2 flex-shrink-0">
               {activeCallouts.map(type => (
                 <ConceptCallout key={type} type={type} onDismiss={() => dismissCallout(type)} />
               ))}
@@ -1242,19 +1342,17 @@ export default function App() {
           )}
 
           {/* Network Graph */}
-          <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-3 flex-1 min-h-0">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-semibold text-slate-300">Network</h2>
-              {animatingLayer >= 0 && (
-                <span className="text-xs text-blue-400 font-mono animate-pulse">
-                  Animating layer {animatingLayer}…
-                </span>
-              )}
-              {lastGradients && !animatingLayer && (
-                <span className="text-xs text-violet-400 font-mono">
-                  Edges colored by ∂L/∂W
-                </span>
-              )}
+          <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-2 flex-1 min-h-0">
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-xs font-semibold text-slate-300">Network</h2>
+              <div className="flex items-center gap-3 text-xs">
+                {animatingLayer >= 0 && (
+                  <span className="text-blue-400 font-mono animate-pulse">→ layer {animatingLayer}</span>
+                )}
+                {lastGradients && animatingLayer < 0 && (
+                  <span className="text-violet-400 font-mono">edges = ∂L/∂W</span>
+                )}
+              </div>
             </div>
             <NetworkGraph
               layerSizes={layerSizes}
@@ -1266,102 +1364,107 @@ export default function App() {
           </div>
 
           {/* Bottom row: Decision Boundary + Loss Curve */}
-          <div className="flex gap-4 h-72">
+          <div className="flex gap-3 flex-shrink-0" style={{ height: '280px' }}>
             {/* Decision Boundary */}
-            <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-3">
-              <h2 className="text-sm font-semibold text-slate-300 mb-2">Decision Boundary</h2>
-              <p className="text-xs text-slate-500 mb-2">Click to run inference</p>
+            <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-2 flex-shrink-0">
+              <h2 className="text-xs font-semibold text-slate-300 mb-1">Decision Boundary</h2>
               {network ? (
-                  <DecisionBoundaryCanvas
-                    weights={network.weights}
-                    biases={network.biases}
-                    hiddenActivationTypes={activationTypes}
-                    inferencePoint={inferencePoint}
-                    onClick={handleCanvasClick}
-                  />
+                <DecisionBoundaryCanvas
+                  weights={network.weights} biases={network.biases}
+                  hiddenActivationTypes={activationTypes}
+                  inferencePoint={inferencePoint} onClick={handleCanvasClick} />
               ) : (
-                <div className="w-[260px] h-[260px] bg-slate-800 rounded flex items-center justify-center text-slate-500 text-sm">
+                <div className="w-[260px] h-[260px] bg-slate-800 rounded flex items-center justify-center text-slate-600 text-xs">
                   Initializing…
                 </div>
               )}
-              <div className="flex items-center gap-3 mt-2 text-xs text-slate-500">
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-blue-500 inline-block" /> Class 0</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-orange-500 inline-block" /> Class 1</span>
+              <div className="flex gap-3 mt-1 text-xs text-slate-500">
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block"/>Class 0</span>
+                <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block"/>Class 1</span>
+                <span className="text-slate-600">· click = infer</span>
               </div>
             </div>
 
             {/* Loss Curve */}
-            <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-3 flex-1 flex flex-col">
-              <h2 className="text-sm font-semibold text-slate-300 mb-2">Training Loss (BCE)</h2>
+            <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-2 flex-1 flex flex-col min-w-0">
+              <h2 className="text-xs font-semibold text-slate-300 mb-1">BCE Loss Curve</h2>
               {lossHistory.length > 1 ? (
                 <div className="flex-1 min-h-0">
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={lossHistory} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
+                    <LineChart data={lossHistory} margin={{ top:4, right:8, left:-22, bottom:4 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                      <XAxis
-                        dataKey="epoch"
-                        tick={{ fill: '#64748b', fontSize: 10 }}
-                        label={{ value: 'Epoch', position: 'insideBottomRight', offset: -5, fill: '#64748b', fontSize: 10 }}
-                      />
-                      <YAxis
-                        domain={[0, 'auto']}
-                        tick={{ fill: '#64748b', fontSize: 10 }}
-                      />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', fontSize: 11 }}
-                        labelStyle={{ color: '#94a3b8' }}
-                        itemStyle={{ color: '#60a5fa' }}
-                        formatter={(v) => v.toFixed(4)}
-                      />
-                      <Line
-                        type="monotone" dataKey="loss"
-                        stroke="#60a5fa" strokeWidth={1.5}
-                        dot={false} isAnimationActive={false}
-                      />
+                      <XAxis dataKey="epoch" tick={{ fill:'#64748b', fontSize:9 }} />
+                      <YAxis domain={[0,'auto']} tick={{ fill:'#64748b', fontSize:9 }} />
+                      <Tooltip contentStyle={{ backgroundColor:'#1e293b', border:'1px solid #334155', fontSize:10 }}
+                        labelStyle={{ color:'#94a3b8' }} itemStyle={{ color:'#60a5fa' }}
+                        formatter={v => v.toFixed(5)} />
+                      <Line type="monotone" dataKey="loss" stroke="#60a5fa" strokeWidth={1.5}
+                        dot={false} isAnimationActive={false} />
+                      {/* Visual threshold line at convergence criterion */}
+                      <Line type="monotone" dataKey={() => CONVERGENCE_LOSS_THRESHOLD}
+                        stroke="#10b981" strokeWidth={1} strokeDasharray="4 4"
+                        dot={false} isAnimationActive={false} legendType="none" />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
               ) : (
-                <div className="flex-1 flex items-center justify-center text-slate-600 text-sm">
+                <div className="flex-1 flex items-center justify-center text-slate-600 text-xs">
                   Start training to see loss curve
                 </div>
               )}
               {lossHistory.length > 1 && (
-                <div className="text-xs text-slate-500 mt-1 font-mono">
-                  Initial: {lossHistory[0]?.loss.toFixed(4)} → Current: {latestLoss?.toFixed(4)}
-                  {latestLoss < 0.05 && <span className="text-emerald-400 ml-2">✓ Converged</span>}
+                <div className="text-xs text-slate-500 font-mono mt-1">
+                  Initial {lossHistory[0]?.loss.toFixed(4)} → Current {latestLoss?.toFixed(4)}
+                  <span className="text-slate-600 ml-2">(green line = {CONVERGENCE_LOSS_THRESHOLD} target)</span>
+                  {trainingStatus === 'converged' && <span className="text-emerald-400 ml-2">✓ XOR solved</span>}
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* ================================================================
-            RIGHT PANEL — PyTorch Sidebar
-        ================================================================ */}
-        <div className="w-72 border-l border-slate-700 p-4 flex flex-col gap-3">
-          <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">PyTorch Equivalent</h2>
-          <p className="text-xs text-slate-500">Updates live as you change the architecture. Code is explanatory — it doesn't run here.</p>
-          <div className="flex-1 min-h-0">
-            <PyTorchSidebar
-              layerSizes={layerSizes}
+        {/* ═══════════════════════════════════════════════════════════════════
+            RIGHT PANEL — PyTorch + XOR Verify + Math Audit
+        ═══════════════════════════════════════════════════════════════════ */}
+        <div className="w-80 border-l border-slate-700 p-3 flex flex-col gap-3 overflow-y-auto flex-shrink-0">
+          {/* PyTorch code */}
+          <div className="flex-shrink-0" style={{ height: '280px' }}>
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">PyTorch Equivalent</h2>
+              <span className="text-xs text-slate-600">explanatory only</span>
+            </div>
+            <PyTorchSidebar layerSizes={layerSizes} hiddenActivationTypes={activationTypes} />
+          </div>
+
+          <div className="border-t border-slate-700" />
+
+          {/* XOR Verification table */}
+          <div className="flex-shrink-0 bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
+            <XorVerifyPanel xorResults={xorResults} />
+          </div>
+
+          <div className="border-t border-slate-700" />
+
+          {/* Math Audit Panel */}
+          <div className="flex-shrink-0 bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
+            <MathAuditPanel
+              xorResults={xorResults}
               hiddenActivationTypes={activationTypes}
+              layerSizes={layerSizes}
             />
           </div>
-          {/* Weight summary */}
+
+          {/* Parameter count */}
           {network && (
-            <div className="bg-slate-800 rounded p-2 text-xs font-mono">
-              <div className="text-slate-400 mb-1">Parameter counts:</div>
-              {network.weights.map((W, l) => {
-                const params = W.length * W[0].length + W.length;
-                return (
-                  <div key={l} className="text-slate-300">
-                    Layer {l + 1}: {W[0].length}×{W.length} + {W.length}b = {params} params
-                  </div>
-                );
-              })}
-              <div className="text-blue-400 mt-1">
-                Total: {network.weights.reduce((s, W) => s + W.length * W[0].length + W.length, 0)} params
+            <div className="flex-shrink-0 bg-slate-800 rounded p-2 text-xs font-mono border border-slate-700">
+              <div className="text-slate-500 mb-1">Parameters</div>
+              {network.weights.map((W, l) => (
+                <div key={l} className="text-slate-400">
+                  L{l+1}: {W[0].length}×{W.length}+{W.length}b = {W.length*W[0].length+W.length}
+                </div>
+              ))}
+              <div className="text-blue-400 mt-0.5">
+                Total: {network.weights.reduce((s,W) => s+W.length*W[0].length+W.length, 0)}
               </div>
             </div>
           )}
