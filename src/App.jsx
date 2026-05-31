@@ -342,9 +342,12 @@ function computeDecisionBoundary(weights, biases, hiddenActivationTypes, gridSiz
   for (let row = 0; row < gridSize; row++) {
     const gridRow = [];
     for (let col = 0; col < gridSize; col++) {
-      // Map grid indices to [0,1] space
+      // Map grid indices to [0,1] space.
+      // row=0 is the top of the canvas; the y-axis convention used everywhere
+      // else in this file places x₂=1 at the top (cy = (1-x₂)·H).
+      // Flipping here keeps the boundary colours aligned with the drawn points.
       const x1 = col / (gridSize - 1);
-      const x2 = row / (gridSize - 1);
+      const x2 = 1 - row / (gridSize - 1);
       const { activations } = forwardPass([x1, x2], weights, biases, hiddenActivationTypes);
       gridRow.push(activations[L][0]); // output probability
     }
