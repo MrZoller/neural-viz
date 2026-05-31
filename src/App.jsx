@@ -843,7 +843,11 @@ function TrainingStatusBar({ status, epoch, loss, bestLoss, epochsSinceImprove, 
 // =============================================================================
 // COMPONENT: ConceptCallout
 // =============================================================================
-function ConceptCallout({ type, onDismiss }) {
+function ConceptCallout({ type, onDismiss, trainingStatus }) {
+  // trainingStatus is used to adjust callouts that describe an ongoing
+  // action — once training stops, their wording should reflect the past tense.
+  const stopped = trainingStatus !== 'training';
+
   const callouts = {
     firstForward: {
       title: 'First Forward Pass', color: 'border-blue-500', icon: '→',
@@ -851,8 +855,11 @@ function ConceptCallout({ type, onDismiss }) {
       pytorch: 'output = model(input_tensor)  # calls model.forward()',
     },
     firstBackprop: {
-      title: 'Backpropagation Running', color: 'border-violet-500', icon: '←',
-      body: 'Gradients flow right → left. Each weight learns how much it contributed to the error. The chain rule multiplies local derivatives at each layer.',
+      title: stopped ? 'Backprop Complete' : 'Backpropagation Running',
+      color: 'border-violet-500', icon: '←',
+      body: stopped
+        ? 'Gradients were computed via the chain rule and weights were updated. The edges are now colored by the last ∂L/∂W values from the final epoch.'
+        : 'Gradients flow right → left. Each weight learns how much it contributed to the error. The chain rule multiplies local derivatives at each layer.',
       pytorch: 'loss.backward()  # PyTorch autograd computes all ∂L/∂W',
     },
     lossPlateauing: {
@@ -1348,7 +1355,7 @@ export default function App() {
           {activeCallouts.length > 0 && (
             <div className="flex flex-col gap-2 flex-shrink-0">
               {activeCallouts.map(type => (
-                <ConceptCallout key={type} type={type} onDismiss={() => dismissCallout(type)} />
+                <ConceptCallout key={type} type={type} onDismiss={() => dismissCallout(type)} trainingStatus={trainingStatus} />
               ))}
             </div>
           )}
