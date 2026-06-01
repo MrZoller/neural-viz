@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in contributing to the Neural Network Learning Tool. This project is an educational resource, so the most important quality standard is **mathematical honesty**: every visualization must reflect real computation, not a demo approximation.
+Thank you for your interest in contributing to Neural Net Playground. This project is an educational resource, so the most important quality standard is **mathematical honesty**: every visualization must reflect real computation, not a demo approximation.
 
 ---
 
@@ -35,19 +35,20 @@ npm run preview
 
 ## What to Work On
 
-The project follows a phased roadmap. Check the [open issues](https://github.com/MrZoller/neural-viz/issues) for work tagged by phase.
+Check the [open issues](https://github.com/MrZoller/neural-viz/issues) and the `[Unreleased]` section of [CHANGELOG.md](CHANGELOG.md) for planned work.
 
 **Good first contributions:**
 
 - Fixing a mathematical error in the existing implementation
-- Improving an explanation in a concept callout
-- Improving the PyTorch code generator output
+- Improving an explanation in a concept callout or educational note
+- Improving the PyTorch code generator or exported notebook output
 - Adding inline code comments where the math is unclear
 - Accessibility improvements (keyboard navigation, color-blind-friendly palette)
 
 **Larger contributions — discuss first:**
 
-- Phase 2 or Phase 3 features
+- Gradient flow summary (per-layer gradient magnitude statistics)
+- Loss surface viewer (2D slice over two selected weights)
 - Changing the training dataset beyond XOR
 - Adding a second optimizer (Adam, RMSProp)
 - Adding a second loss function

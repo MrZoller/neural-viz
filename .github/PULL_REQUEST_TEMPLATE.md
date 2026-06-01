@@ -5,8 +5,8 @@
 ## Type of change
 
 - [ ] Bug fix — corrects a mathematical or visual error
-- [ ] Feature — implements part of the Phase 2 or Phase 3 roadmap
-- [ ] Documentation — improves comments, callouts, or the PyTorch sidebar
+- [ ] Feature — adds a new panel, visualization, or export capability
+- [ ] Documentation — improves comments, callouts, or educational text
 - [ ] Refactor — restructures code without changing behavior
 - [ ] Other:
 
@@ -24,11 +24,14 @@
 
 <!-- Describe how you verified this works: -->
 
-- [ ] Trained to convergence on XOR (loss < 0.05)
-- [ ] Animated a forward pass and verified neuron values
+- [ ] Trained to convergence on XOR
+- [ ] Ran an Explained Step and confirmed all 4 stages display correctly
+- [ ] Animated a forward pass (click-to-predict) and verified neuron values
 - [ ] Clicked to predict on the boundary canvas
 - [ ] Changed architecture (layers, neurons, activation) and confirmed reinitialize works
-- [ ] Verified PyTorch sidebar updates on architecture change
+- [ ] Verified PyTorch export panel updates on architecture change
+- [ ] Opened the Weights tab and confirmed matrix display and JSON export
+- [ ] Opened the ∫ Calc tab and confirmed chain rule trace and activation plot
 - [ ] Checked build passes: `npm run build`
 
 ## Related issues
