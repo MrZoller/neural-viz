@@ -8,17 +8,79 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Planned — Phase 2
-- Backprop visualization with numeric gradient values displayed on edges
-- Vanishing gradient highlight with color-coded input-layer edges
-- Confidence heatmap toggle on the decision boundary canvas
-- Forward-pass animation for inference (layer-by-layer activation display on click-to-predict)
+### Planned
+- Gradient flow summary: per-layer average/max/min gradient magnitudes, dead-ReLU count, vanishing-gradient flag
+- Loss surface viewer: 2D slice over two selected weights with current-position marker
+- Test batch panel: add multiple test points, view predicted class and confidence table
 
-### Planned — Phase 3
-- Chain rule tracer: click any weight to see the full ∂L/∂w derivation written out step by step
-- Activation derivative explorer: plot activation function with moveable input point and tangent line
-- Loss surface contour plot over two selected weights with gradient descent path trail
-- Test batch panel: add multiple test points, view results table with predicted class and confidence
+---
+
+## [0.2.0] — 2026-06-01
+
+### Added
+
+**App identity**
+- Renamed from "Neural Network Learning Tool" to **Neural Net Playground**; tagline "Make the math visible."
+- Browser `<title>`, app header, exported script/notebook headers, and JSON `source` field all updated
+
+**Phase 2 — Backpropagation visualization and interactive training**
+
+- Backprop edge coloring: edges colored by `|∂L/∂w|` magnitude (gray = near-zero → red = large) after every backward pass
+- Numeric `∂w` labels toggle: overlay exact gradient values on each edge
+- Gradient legend moved from SVG to HTML so it no longer overlaps input-layer neurons
+- Convergence auto-stop: two criteria — loss below 0.001, or all 4 XOR points correct with >95% confidence for 50 consecutive epochs; fires a "Converged ✓" callout
+- Plateau detection: stops training when loss improvement is less than 0.0005 over 100 epochs; callout suggests reset, Tanh, LR adjustment, or capacity change, with dead-ReLU explanation
+- Vanishing-gradient detection: fires when first-layer max gradient is below 1% of global max
+- Explained Step mode: 4-stage interactive walkthrough (Forward → Loss → Backward → Update) with Next / Prev / Auto-play controls and a speed slider; highlights the active stage in the network graph
+- Confidence heatmap toggle on decision boundary canvas (|p − 0.5| × 2 mapped to amber brightness)
+- Click-to-predict: click anywhere on the decision boundary canvas to run a real forward pass and animate activations layer-by-layer
+- Math Audit panel: per-sample forward-pass trace with symbolic BCE formula and numeric values
+- Finite-difference gradient check (∂w Check tab): verifies backprop gradient against symmetric numerical estimate `[L(w+ε) − L(w−ε)] / 2ε`; auto-pick button selects the weight with the largest `|∂L/∂w|`
+
+**PyTorch export panel** (replaces old sidebar)
+- Compact architecture/optimizer/activation summary
+- Visual-concept → PyTorch API mapping table
+- Copy Script button: copies a complete, runnable `.py` file to clipboard (2 s "✓ Copied!" feedback)
+- Export Notebook button: downloads a `.ipynb` file (nbformat v4, 18 cells) covering imports, dataset, model, training loop, loss curve, XOR verification, decision boundary, and custom inference
+- Collapsible full PyTorch code block
+
+**Parameters / Weights Inspector** (Weights tab)
+- Per-layer weight matrices rendered as color-coded tables: amber = positive, blue = negative, opacity = relative magnitude
+- Bias vector chips below each weight matrix
+- Storage/PyTorch orientation note per layer: `W[out_feature][in_feature]` matches `nn.Linear.weight`; no transposition needed
+- Educational callout explaining weights as learned multipliers and biases as threshold shifters
+- LLM analogy callout (collapsible): contextualises parameter count against frontier models without unverified claims; includes architectural disclaimer
+- Copy JSON / Download JSON (`neural-viz-params.json`): exports weights, biases, architecture, and training state
+- Parameter JSON includes `xor_verification` array (per-point input/expected/predicted/confidence/correct), `convergence_reason` field (`loss_threshold`, `xor_verified`, or both), and an explanatory `note` when converged via confidence criterion with loss still above threshold
+- PyTorch weight-loading snippet (collapsible)
+
+**Phase 3 — Calculus panel** (∫ Calc tab)
+
+*∂w Trace — Chain Rule Tracer*
+- Select any weight W[layer][j][k] and any of the 4 XOR input samples
+- Re-runs a live forward + backprop (not stored averages) to produce exact per-sample deltas
+- Symbolic formula box: `∂L/∂w = δⱼ · aₖ` with output-layer BCE+σ shortcut or hidden-layer chain expansion written out
+- Three numeric term cards: aₖ (incoming activation), zⱼ + f′(zⱼ) (with dead/saturated inline warning for hidden layers), δⱼ (with derivation note)
+- Output-layer f′: labelled as informational only; explains that BCE+sigmoid simplifies δ to ŷ−y so the derivative is already accounted for
+- Result box: per-sample gradient vs batch-averaged gradient with update-direction explanation
+
+*f(z) Plot — Activation Function Explorer*
+- Layer + neuron dropdowns; XOR sample picker; f′(z) overlay toggle
+- Recharts `LineChart` showing f(z) curve (colored by activation type), f′(z) dashed overlay, tangent line segment at current z (±1.5 window), vertical `ReferenceLine`, and filled `ReferenceDot` markers
+- Numeric readout: z, f(z), f′(z) from the actual forward pass for the selected sample
+- Dead-ReLU callout: "z stays below 0 for all training samples" (per-dataset framing, not per-input)
+- Saturation callout for Tanh/Sigmoid when |f′(z)| < 0.05
+- Educational notes per activation type covering saturation, dead neurons, vanishing gradients, and the f′(0)=0 convention for ReLU
+
+### Fixed
+- Decision boundary y-axis was inverted; corrected so canvas top = x₂ = 1
+- Right panel overflow: PyTorch code no longer bled into XOR verify / audit panels
+- Network graph auto-sizes to content; removed empty vertical space
+- `firstBackprop` callout title was shown after training stopped; now correctly suppressed
+
+### Changed
+- Right panel tab bar expanded from 2 tabs (Math Audit, ∂w Check) to 4 (Audit, ∂w Check, Weights, ∫ Calc)
+- `xor_solved` in JSON export uses `r.correct` (consistent with XOR Verify panel); was reading undefined field `r.prediction`
 
 ---
 
