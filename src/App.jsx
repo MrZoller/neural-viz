@@ -17,6 +17,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  ReferenceLine, ReferenceDot,
 } from 'recharts';
 
 // =============================================================================
@@ -742,7 +743,26 @@ function checkConvergence(loss, xorResults, consecutiveCorrect) {
 }
 
 // =============================================================================
-// SECTION 15 — GRADIENT CHECK  (finite-difference verification)
+// SECTION 15 — CALCULUS PANEL UTILITIES
+// =============================================================================
+
+// Activation curve + derivative + tangent for Recharts.
+// Returns numPoints objects: { z, a, dAdZ, tangent }
+// tangent is only defined within ±1.5 of currentZ (null elsewhere → gap in chart).
+function computeActivationCurve(activType, zMin = -4, zMax = 4, numPoints = 80, currentZ = null) {
+  const fn    = ACTIVATIONS[activType].fn;
+  const deriv = ACTIVATIONS[activType].derivative;
+  return Array.from({ length: numPoints }, (_, i) => {
+    const z       = zMin + (i / (numPoints - 1)) * (zMax - zMin);
+    const tangent = (currentZ !== null && Math.abs(z - currentZ) <= 1.5)
+      ? fn(currentZ) + deriv(currentZ) * (z - currentZ)
+      : null;
+    return { z, a: fn(z), dAdZ: deriv(z), tangent };
+  });
+}
+
+// =============================================================================
+// SECTION 16 — GRADIENT CHECK  (finite-difference verification)
 //
 // Verifies that the backprop gradient ∂L/∂w for a single weight matches the
 // numerical estimate computed via the symmetric (centered) finite-difference:
@@ -1365,6 +1385,540 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGr
             Relative error = |err| / (|backprop| + |fd|)
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// COMPONENT: ChainRuleTracer
+//
+// For a selected weight W[l][j][k], shows the full chain-rule derivation using
+// actual values from a fresh per-sample backprop (not the stored average).
+//
+// Math:  ∂L/∂w_{jk}^{(l)} = δⱼ · aₖ
+//   where δⱼ = ∂L/∂zⱼ  (error signal at destination neuron's pre-activation)
+//         aₖ = activations[l][k]  (incoming activation through this weight)
+//
+// The stored lastGradients.dWeights are *averaged* over all 4 XOR samples.
+// The trace below shows per-sample values for the selected input, with a
+// comparison to the batch-average gradient that actually drives training.
+// =============================================================================
+function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradients }) {
+  const [selLayer,  setSelLayer]  = useState(0);
+  const [selOutN,   setSelOutN]   = useState(0);
+  const [selInN,    setSelInN]    = useState(0);
+  const [selSample, setSelSample] = useState(0);
+
+  if (!network || !lastGradients) {
+    return (
+      <div className="text-slate-500 text-xs italic text-center py-6 px-2">
+        Run at least one training step or Explained Step to trace a gradient.
+      </div>
+    );
+  }
+
+  const L       = network.weights.length;
+  const safeL   = Math.min(selLayer, L - 1);
+  const safeJ   = Math.min(selOutN, layerSizes[safeL + 1] - 1);
+  const safeK   = Math.min(selInN,  layerSizes[safeL]     - 1);
+
+  // Re-run forward + backprop on the selected XOR sample to get per-sample deltas.
+  // backprop() returns deltas[] where deltas[l+1][j] = ∂L/∂z_j for layer l+1.
+  const sample = XOR_DATA[selSample];
+  const { activations, preActivations } = forwardPass(
+    sample.input, network.weights, network.biases, hiddenActivationTypes
+  );
+  const { dWeights: perDW, deltas } = backprop(
+    [sample.label], activations, preActivations, network.weights, hiddenActivationTypes
+  );
+
+  const l = safeL, j = safeJ, k = safeK;
+  const isOut    = l === L - 1;
+  const actType  = isOut ? 'sigmoid' : (hiddenActivationTypes[l] || 'relu');
+  const actLabel = ACTIVATIONS[actType].label;
+
+  // The three quantities that compose the gradient
+  const a_in    = activations[l][k];         // aₖ — incoming activation
+  const z_j     = preActivations[l + 1][j];  // zⱼ — destination pre-activation
+  const a_j     = activations[l + 1][j];     // f(zⱼ) — destination activation
+  const delta_j = deltas[l + 1][j];          // δⱼ = ∂L/∂zⱼ
+  const dAdZ_j  = ACTIVATIONS[actType].derivative(z_j);  // f′(zⱼ)
+
+  // ∂L/∂aⱼ = δⱼ / f′(zⱼ) — only meaningful when f′ ≠ 0
+  const dLdA_j  = Math.abs(dAdZ_j) > 1e-8 ? delta_j / dAdZ_j : null;
+
+  const sampleGrad = perDW[l][j][k];             // δⱼ · aₖ for this sample
+  const avgGrad    = lastGradients.dWeights[l][j][k]; // batch-averaged gradient
+  const currentW   = network.weights[l][j][k];
+
+  const dead      = actType === 'relu' && z_j <= 0;
+  const saturated = actType !== 'relu' && Math.abs(dAdZ_j) < 0.05;
+
+  const f = v => {
+    if (!isFinite(v)) return '—';
+    return Math.abs(v) < 0.0001 && v !== 0 ? v.toExponential(3) : v.toFixed(5);
+  };
+
+  return (
+    <div className="space-y-3 text-xs">
+      {/* ── Selectors ───────────────────────────────────────────────────────── */}
+      <div className="space-y-1.5">
+        <div className="text-slate-500 mb-0.5" style={{ fontSize: '9px' }}>
+          Weight W[layer][j][k] to trace:
+        </div>
+        <div className="flex gap-1.5">
+          {[
+            {
+              label: 'Layer',
+              value: safeL,
+              set: v => setSelLayer(+v),
+              opts: Array.from({ length: L }, (_, i) => ({
+                v: i, t: i === L - 1 ? `L${i + 1} (out)` : `L${i + 1}`,
+              })),
+            },
+            {
+              label: 'Out j',
+              value: safeJ,
+              set: v => setSelOutN(+v),
+              opts: Array.from({ length: layerSizes[safeL + 1] }, (_, n) => ({ v: n, t: `n${n}` })),
+            },
+            {
+              label: 'In k',
+              value: safeK,
+              set: v => setSelInN(+v),
+              opts: Array.from({ length: layerSizes[safeL] }, (_, n) => ({ v: n, t: `n${n}` })),
+            },
+          ].map(({ label, value, set, opts }) => (
+            <div key={label} className="flex-1">
+              <div className="text-slate-600 mb-0.5" style={{ fontSize: '8px' }}>{label}</div>
+              <select value={value} onChange={e => set(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-slate-200 text-xs">
+                {opts.map(o => <option key={o.v} value={o.v}>{o.t}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+
+        {/* XOR sample picker */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-slate-600" style={{ fontSize: '8px' }}>Input sample:</span>
+          {XOR_DATA.map((s, i) => (
+            <button key={i} onClick={() => setSelSample(i)}
+              className={`px-1.5 py-0.5 rounded font-mono border transition-colors ${
+                selSample === i
+                  ? 'bg-blue-900/50 text-blue-300 border-blue-700'
+                  : 'bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300'
+              }`} style={{ fontSize: '9px' }}>
+              [{s.input}]→{s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Symbolic formula ─────────────────────────────────────────────────── */}
+      <div className="bg-slate-900/70 border border-slate-700 rounded p-2 space-y-1">
+        <div className="text-slate-600 uppercase tracking-wider" style={{ fontSize: '8px' }}>
+          Symbolic formula
+        </div>
+        <div className="font-mono text-slate-200">
+          ∂L/∂w = δⱼ · aₖ
+        </div>
+        {isOut ? (
+          <>
+            <div className="font-mono text-slate-400 text-xs">
+              where δⱼ = ŷ − y
+              <span className="text-slate-600 font-sans ml-1.5">(BCE + σ shortcut)</span>
+            </div>
+            <div className="text-slate-600 leading-tight" style={{ fontSize: '9px' }}>
+              Output layer: ∂L/∂ŷ · ∂ŷ/∂z = [−y/ŷ+(1−y)/(1−ŷ)] · ŷ(1−ŷ) simplifies to ŷ−y.
+              No separate σ′ term needed.
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="font-mono text-slate-400 text-xs">
+              where δⱼ = (Σ w·δ<sub>next</sub>) · {actLabel}′(zⱼ)
+            </div>
+            <div className="text-slate-600 leading-tight" style={{ fontSize: '9px' }}>
+              Hidden layer: backpropagated error from the next layer is multiplied by
+              the local derivative — this is the chain rule applied recursively.
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Numeric term cards ───────────────────────────────────────────────── */}
+      <div className="space-y-1.5">
+        <div className="text-slate-500 uppercase tracking-wider" style={{ fontSize: '8px' }}>
+          Numeric substitution — sample [{sample.input}]→{sample.label}
+        </div>
+
+        {/* aₖ */}
+        <div className="bg-slate-800/50 border border-slate-700/60 rounded p-1.5 flex items-start gap-2">
+          <span className="font-mono text-amber-400 w-10 shrink-0 mt-px">aₖ</span>
+          <div className="flex-1 text-slate-500 leading-tight" style={{ fontSize: '9px' }}>
+            Activation of neuron {k} in {l === 0 ? 'the input layer' : `hidden layer ${l}`}.
+            This is the signal flowing <em>into</em> weight w[{l}][{j}][{k}].
+          </div>
+          <span className="font-mono text-amber-300 shrink-0">{f(a_in)}</span>
+        </div>
+
+        {/* zⱼ + f′(zⱼ) */}
+        <div className="bg-slate-800/50 border border-slate-700/60 rounded p-1.5 space-y-1">
+          <div className="flex items-start gap-2">
+            <span className="font-mono text-blue-400 w-10 shrink-0">zⱼ</span>
+            <div className="flex-1 text-slate-500 leading-tight" style={{ fontSize: '9px' }}>
+              Pre-activation (Σ w·a + b) at neuron {j} in layer {l + 1}.
+            </div>
+            <span className="font-mono text-blue-300 shrink-0">{f(z_j)}</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="font-mono text-blue-300 w-10 shrink-0">{actLabel}′</span>
+            <div className="flex-1 text-slate-500 leading-tight" style={{ fontSize: '9px' }}>
+              Local derivative f′(zⱼ) — how much the activation changes per unit of z.
+            </div>
+            <span className={`font-mono shrink-0 ${dead || saturated ? 'text-red-400' : 'text-slate-200'}`}>
+              {f(dAdZ_j)}
+            </span>
+          </div>
+          {dead && (
+            <div className="text-red-400 leading-tight" style={{ fontSize: '9px' }}>
+              ⚠ Dead ReLU: z≤0 → f′=0. Gradient through this neuron is zero.
+              The weight cannot learn until the neuron "wakes up."
+            </div>
+          )}
+          {!dead && saturated && (
+            <div className="text-amber-400 leading-tight" style={{ fontSize: '9px' }}>
+              ⚠ Saturated {actLabel}: f′≈0. Gradient barely flows — learning slows here.
+            </div>
+          )}
+        </div>
+
+        {/* δⱼ */}
+        <div className="bg-slate-800/50 border border-slate-700/60 rounded p-1.5 flex items-start gap-2">
+          <span className="font-mono text-violet-400 w-10 shrink-0 mt-px">δⱼ</span>
+          <div className="flex-1 text-slate-500 leading-tight" style={{ fontSize: '9px' }}>
+            {isOut
+              ? `ŷ − y = ${f(a_j)} − ${sample.label}. Combined BCE+σ error signal.`
+              : dLdA_j !== null
+                ? `Backpropagated error ${f(dLdA_j)} × ${actLabel}′ ${f(dAdZ_j)} = chain-rule product.`
+                : `f′(z)=0 — dead neuron, δⱼ=0, gradient blocked.`
+            }
+          </div>
+          <span className="font-mono text-violet-300 shrink-0">{f(delta_j)}</span>
+        </div>
+      </div>
+
+      {/* ── Result ──────────────────────────────────────────────────────────── */}
+      <div className="bg-slate-900/80 border border-slate-600 rounded p-2 space-y-1.5">
+        <div className="text-slate-500 uppercase tracking-wider" style={{ fontSize: '8px' }}>Result</div>
+        <div className="font-mono flex items-center gap-1 flex-wrap">
+          <span className="text-violet-300">{f(delta_j)}</span>
+          <span className="text-slate-600">×</span>
+          <span className="text-amber-300">{f(a_in)}</span>
+          <span className="text-slate-600">=</span>
+          <span className="text-emerald-400 font-bold">{f(sampleGrad)}</span>
+        </div>
+        <div className="flex gap-3 font-mono" style={{ fontSize: '9px' }}>
+          <span className="text-slate-500">this sample:</span>
+          <span className="text-emerald-400">{f(sampleGrad)}</span>
+          <span className="text-slate-700">|</span>
+          <span className="text-slate-500">batch avg (×4):</span>
+          <span className="text-blue-400">{f(avgGrad)}</span>
+        </div>
+        <div className="text-slate-600 leading-tight" style={{ fontSize: '9px' }}>
+          Training uses the batch average. Each sample contributes a different
+          gradient; averaging reduces noise. Update: w ← w − lr·{f(avgGrad)}
+          {' '}→ w will {avgGrad > 0 ? 'decrease' : avgGrad < 0 ? 'increase' : 'not change'}.
+        </div>
+        <div className="font-mono text-slate-500 border-t border-slate-800 pt-1" style={{ fontSize: '9px' }}>
+          w[{l}][{j}][{k}] current value: {currentW >= 0 ? '+' : ''}{currentW.toFixed(5)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// COMPONENT: ActivationExplorer
+//
+// Plots the activation function for a selected layer/neuron using actual z
+// values from a real forward pass on the selected XOR input.
+// Shows: f(z) curve, f′(z) derivative curve, tangent line at current z,
+// vertical marker at current z, and numeric readout.
+// =============================================================================
+function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastForwardData }) {
+  const [selLayer,  setSelLayer]  = useState(1);
+  const [selNeuron, setSelNeuron] = useState(0);
+  const [selSample, setSelSample] = useState(0);
+  const [showDeriv, setShowDeriv] = useState(true);
+
+  if (!network) {
+    return (
+      <div className="text-slate-500 text-xs italic text-center py-6 px-2">
+        Initialize the network first.
+      </div>
+    );
+  }
+
+  const numLayers = layerSizes.length;   // includes input layer
+  const safeLayer = Math.max(1, Math.min(selLayer, numLayers - 1));
+  const safeN     = Math.min(selNeuron, layerSizes[safeLayer] - 1);
+  const isOut     = safeLayer === numLayers - 1;
+  const actType   = isOut ? 'sigmoid' : (hiddenActivationTypes[safeLayer - 1] || 'relu');
+  const actColor  = ACTIVATIONS[actType].color;
+  const actLabel  = ACTIVATIONS[actType].label;
+
+  // Compute actual z and activation values for the selected sample
+  const sample = XOR_DATA[selSample];
+  const { activations: sActs, preActivations: sPre } = forwardPass(
+    sample.input, network.weights, network.biases, hiddenActivationTypes
+  );
+  const zVal  = sPre[safeLayer]?.[safeN] ?? null;
+  const aVal  = sActs[safeLayer]?.[safeN] ?? null;
+  const dAdZ  = zVal !== null ? ACTIVATIONS[actType].derivative(zVal) : null;
+
+  const dead      = actType === 'relu' && zVal !== null && zVal <= 0;
+  const saturated = actType !== 'relu' && dAdZ !== null && Math.abs(dAdZ) < 0.05;
+
+  // Curve data for Recharts (tangent only rendered within ±1.5 of current z)
+  const curveData = computeActivationCurve(actType, -4, 4, 80, zVal);
+  const yDomain   = actType === 'relu' ? [-0.3, 1.3] : [-1.3, 1.3];
+  const f4 = v => (v !== null && isFinite(v)) ? v.toFixed(4) : '—';
+
+  return (
+    <div className="space-y-2.5 text-xs">
+      {/* ── Selectors ───────────────────────────────────────────────────────── */}
+      <div className="space-y-1.5">
+        <div className="flex gap-1.5">
+          <div className="flex-1">
+            <div className="text-slate-600 mb-0.5" style={{ fontSize: '8px' }}>Layer</div>
+            <select value={safeLayer} onChange={e => setSelLayer(+e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-slate-200 text-xs">
+              {Array.from({ length: numLayers - 1 }, (_, i) => i + 1).map(li => (
+                <option key={li} value={li}>
+                  {li === numLayers - 1 ? `Layer ${li} (output)` : `Layer ${li} (hidden)`}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex-1">
+            <div className="text-slate-600 mb-0.5" style={{ fontSize: '8px' }}>Neuron</div>
+            <select value={safeN} onChange={e => setSelNeuron(+e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-slate-200 text-xs">
+              {Array.from({ length: layerSizes[safeLayer] }, (_, n) => (
+                <option key={n} value={n}>n{n}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-slate-600" style={{ fontSize: '8px' }}>Input:</span>
+          {XOR_DATA.map((s, i) => (
+            <button key={i} onClick={() => setSelSample(i)}
+              className={`px-1.5 py-0.5 rounded font-mono border transition-colors ${
+                selSample === i
+                  ? 'bg-blue-900/50 text-blue-300 border-blue-700'
+                  : 'bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300'
+              }`} style={{ fontSize: '9px' }}>
+              [{s.input}]
+            </button>
+          ))}
+          <button onClick={() => setShowDeriv(v => !v)}
+            className={`ml-auto px-1.5 py-0.5 rounded border transition-colors ${
+              showDeriv
+                ? 'bg-slate-700 text-slate-300 border-slate-600'
+                : 'bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300'
+            }`} style={{ fontSize: '9px' }}>
+            show f′(z)
+          </button>
+        </div>
+      </div>
+
+      {/* ── Stats readout ────────────────────────────────────────────────────── */}
+      <div className="bg-slate-800/50 border border-slate-700 rounded p-2">
+        <div className="flex items-center justify-between mb-1">
+          <span className="font-semibold text-sm" style={{ color: actColor }}>{actLabel}</span>
+          <span className="text-slate-500 font-mono" style={{ fontSize: '9px' }}>
+            layer {safeLayer}, n{safeN}
+          </span>
+        </div>
+        {zVal !== null && (
+          <div className="grid grid-cols-3 gap-x-2 font-mono" style={{ fontSize: '9px' }}>
+            <div><span className="text-slate-500">z =</span> <span className="text-blue-300">{f4(zVal)}</span></div>
+            <div><span className="text-slate-500">f(z) =</span> <span style={{ color: actColor }}>{f4(aVal)}</span></div>
+            <div>
+              <span className="text-slate-500">f′(z) =</span>
+              <span className={`ml-0.5 ${(dead || saturated) ? 'text-red-400' : 'text-slate-200'}`}>
+                {f4(dAdZ)}
+              </span>
+            </div>
+          </div>
+        )}
+        {dead && (
+          <div className="text-red-400 mt-1 leading-tight" style={{ fontSize: '9px' }}>
+            ⚠ Dead ReLU: z≤0, output=0, gradient=0. This neuron contributes nothing to the
+            forward pass or to learning for this input.
+          </div>
+        )}
+        {!dead && saturated && (
+          <div className="text-amber-400 mt-1 leading-tight" style={{ fontSize: '9px' }}>
+            ⚠ Saturated {actLabel}: f′≈0. Gradient barely flows through this neuron —
+            learning slows in this region.
+          </div>
+        )}
+      </div>
+
+      {/* ── Recharts plot ────────────────────────────────────────────────────── */}
+      <div style={{ height: '170px' }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={curveData} margin={{ top: 8, right: 8, left: -22, bottom: 2 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+            <XAxis dataKey="z" type="number" domain={[-4, 4]} tickCount={5}
+              tick={{ fill: '#475569', fontSize: 8 }} />
+            <YAxis domain={yDomain} tick={{ fill: '#475569', fontSize: 8 }} />
+            <Tooltip
+              contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', fontSize: 9, padding: '3px 6px' }}
+              labelFormatter={v => `z = ${(+v).toFixed(3)}`}
+              formatter={(v, name) => [v !== null ? (+v).toFixed(4) : '—', name]}
+            />
+
+            {/* f(z) curve */}
+            <Line type="monotone" dataKey="a" stroke={actColor} strokeWidth={2}
+              dot={false} isAnimationActive={false} name={`${actLabel}(z)`} />
+
+            {/* f′(z) curve */}
+            {showDeriv && (
+              <Line type="monotone" dataKey="dAdZ" stroke="#64748b" strokeWidth={1.5}
+                strokeDasharray="4 2" dot={false} isAnimationActive={false} name={`${actLabel}′(z)`} />
+            )}
+
+            {/* Tangent line segment (only rendered where non-null, ±1.5 of current z) */}
+            {zVal !== null && (
+              <Line type="linear" dataKey="tangent" stroke="#f59e0b" strokeWidth={1.5}
+                strokeDasharray="3 2" dot={false} isAnimationActive={false}
+                connectNulls={false} name="tangent" />
+            )}
+
+            {/* Vertical reference line at current z */}
+            {zVal !== null && (
+              <ReferenceLine x={zVal} stroke="#f59e0b" strokeWidth={1} strokeOpacity={0.7}
+                strokeDasharray="2 2" />
+            )}
+
+            {/* Dot at f(z) */}
+            {zVal !== null && aVal !== null && (
+              <ReferenceDot x={zVal} y={aVal} r={4} fill={actColor} stroke="#0f172a" strokeWidth={1} />
+            )}
+
+            {/* Dot at f′(z) */}
+            {showDeriv && zVal !== null && dAdZ !== null && (
+              <ReferenceDot x={zVal} y={dAdZ} r={3} fill="#64748b" stroke="#0f172a" strokeWidth={1} />
+            )}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* ── Amber z-label below chart ─────────────────────────────────────────── */}
+      {zVal !== null && (
+        <div className="text-center font-mono text-amber-500/80" style={{ fontSize: '8px' }}>
+          current z = {f4(zVal)}
+          {' · '}f(z) = {f4(aVal)}
+          {showDeriv && ` · f′(z) = ${f4(dAdZ)}`}
+          {' '}(most recent forward pass, sample [{sample.input}])
+        </div>
+      )}
+
+      {/* ── Educational notes ────────────────────────────────────────────────── */}
+      <div className="space-y-1.5 text-slate-500 leading-tight border-t border-slate-800 pt-2"
+           style={{ fontSize: '9px' }}>
+        {actType === 'relu' && (
+          <>
+            <p>
+              <span className="text-blue-400 font-semibold">ReLU(z)</span> = max(0, z).
+              Derivative is 1 for z&gt;0 and 0 for z≤0 — discontinuous but cheap to compute.
+            </p>
+            <p>
+              <span className="text-red-400/80">Dead ReLU</span>: if weights drive z permanently
+              below 0, the neuron always outputs 0 and its gradient is always 0. The weight
+              can never recover through gradient descent alone — reset or use a different
+              activation to fix it.
+            </p>
+          </>
+        )}
+        {actType === 'tanh' && (
+          <>
+            <p>
+              <span className="text-violet-400 font-semibold">Tanh(z)</span> ∈ (−1, 1), zero-centered.
+              Derivative peaks at 1.0 (z=0) and decays toward 0 in both tails.
+            </p>
+            <p>
+              <span className="text-amber-400/80">Saturation</span>: for |z|≳2, tanh′→0.
+              Gradient slows but does not fully stop. Tanh saturates more gracefully than sigmoid
+              and stays zero-centered — often preferable for hidden layers.
+            </p>
+          </>
+        )}
+        {actType === 'sigmoid' && (
+          <>
+            <p>
+              <span className="text-pink-400 font-semibold">Sigmoid(z)</span> ∈ (0, 1).
+              Derivative peaks at 0.25 (at z=0). Output is not zero-centered.
+            </p>
+            <p>
+              <span className="text-amber-400/80">Saturation + vanishing gradients</span>: for |z|≳3,
+              σ′→0. In deep nets, gradients multiply through each layer — a chain of near-zero
+              derivatives shrinks the signal exponentially, making early layers very slow to train.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// COMPONENT: CalcPanel  (Phase 3 Calculus Panel)
+// =============================================================================
+function CalcPanel({ network, layerSizes, hiddenActivationTypes, lastGradients, lastForwardData }) {
+  const [section, setSection] = useState('chain');
+
+  return (
+    <div className="space-y-2.5">
+      {/* Inner tab strip */}
+      <div className="flex border border-slate-700 rounded overflow-hidden">
+        {[
+          { id: 'chain', label: '∂w Trace' },
+          { id: 'activ', label: 'σ(z) Plot' },
+        ].map(({ id, label }) => (
+          <button key={id} onClick={() => setSection(id)}
+            className={`flex-1 py-1 text-xs font-medium transition-colors ${
+              section === id
+                ? 'bg-slate-700 text-white'
+                : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
+            }`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {section === 'chain' && (
+        <ChainRuleTracer
+          network={network}
+          layerSizes={layerSizes}
+          hiddenActivationTypes={hiddenActivationTypes}
+          lastGradients={lastGradients}
+        />
+      )}
+      {section === 'activ' && (
+        <ActivationExplorer
+          network={network}
+          layerSizes={layerSizes}
+          hiddenActivationTypes={hiddenActivationTypes}
+          lastForwardData={lastForwardData}
+        />
       )}
     </div>
   );
@@ -1999,7 +2553,7 @@ export default function App() {
   // ── Phase 2: View options ──────────────────────────────────────────────────
   const [showConfidence,     setShowConfidence]     = useState(false); // confidence vs class boundary
   const [showGradientLabels, setShowGradientLabels] = useState(true);  // numeric ∂L/∂W on edges
-  const [rightPanelTab,      setRightPanelTab]      = useState('audit'); // 'audit' | 'gradcheck' | 'weights'
+  const [rightPanelTab,      setRightPanelTab]      = useState('audit'); // 'audit' | 'gradcheck' | 'weights' | 'calc'
 
   // ── Animation ─────────────────────────────────────────────────────────────
   const [animatingLayer,     setAnimatingLayer]     = useState(-1);
@@ -2913,41 +3467,30 @@ export default function App() {
             </div>
           </div>
 
-          {/* ── Math Audit / Gradient Check / Weights — tabbed, fills remaining height ── */}
+          {/* ── Math Audit / ∂w Check / Weights / Calculus — tabbed ── */}
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden border-b border-slate-700">
-            {/* Tab switcher */}
+            {/* Tab switcher — 4 tabs */}
             <div className="flex flex-shrink-0 border-b border-slate-700">
-              <button
-                onClick={() => setRightPanelTab('audit')}
-                className={`flex-1 text-xs py-1.5 font-medium transition-colors ${
-                  rightPanelTab === 'audit'
-                    ? 'text-blue-400 bg-slate-800/50 border-b-2 border-blue-500'
-                    : 'text-slate-500 hover:text-slate-300'
-                }`}>
-                Math Audit
-              </button>
-              <button
-                onClick={() => setRightPanelTab('gradcheck')}
-                className={`flex-1 text-xs py-1.5 font-medium transition-colors ${
-                  rightPanelTab === 'gradcheck'
-                    ? 'text-indigo-400 bg-slate-800/50 border-b-2 border-indigo-500'
-                    : 'text-slate-500 hover:text-slate-300'
-                }`}>
-                ∂w Check
-              </button>
-              <button
-                onClick={() => setRightPanelTab('weights')}
-                className={`flex-1 text-xs py-1.5 font-medium transition-colors ${
-                  rightPanelTab === 'weights'
-                    ? 'text-amber-400 bg-slate-800/50 border-b-2 border-amber-500'
-                    : 'text-slate-500 hover:text-slate-300'
-                }`}>
-                Weights
-              </button>
+              {[
+                { id: 'audit',    label: 'Audit',    active: 'text-blue-400 border-blue-500'    },
+                { id: 'gradcheck',label: '∂w Check', active: 'text-indigo-400 border-indigo-500'},
+                { id: 'weights',  label: 'Weights',  active: 'text-amber-400 border-amber-500'  },
+                { id: 'calc',     label: '∫ Calc',   active: 'text-emerald-400 border-emerald-500'},
+              ].map(({ id, label, active }) => (
+                <button key={id}
+                  onClick={() => setRightPanelTab(id)}
+                  className={`flex-1 text-xs py-1.5 font-medium transition-colors ${
+                    rightPanelTab === id
+                      ? `${active} bg-slate-800/50 border-b-2`
+                      : 'text-slate-500 hover:text-slate-300'
+                  }`}>
+                  {label}
+                </button>
+              ))}
             </div>
             {/* Tab content */}
             <div className="flex-1 min-h-0 overflow-y-auto p-3">
-              {rightPanelTab === 'weights' ? (
+              {rightPanelTab === 'weights' && (
                 <WeightsInspector
                   network={network}
                   layerSizes={layerSizes}
@@ -2957,7 +3500,17 @@ export default function App() {
                   latestLoss={latestLoss}
                   xorResults={xorResults}
                 />
-              ) : (
+              )}
+              {rightPanelTab === 'calc' && (
+                <CalcPanel
+                  network={network}
+                  layerSizes={layerSizes}
+                  hiddenActivationTypes={activationTypes}
+                  lastGradients={lastGradients}
+                  lastForwardData={lastForwardData}
+                />
+              )}
+              {(rightPanelTab === 'audit' || rightPanelTab === 'gradcheck') && (
                 <div className="bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
                   {rightPanelTab === 'audit' ? (
                     <MathAuditPanel
