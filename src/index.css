@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Smooth transitions for animated elements */
+.neuron-circle {
+  transition: fill 0.3s ease;
+}
+
+.edge-line {
+  transition: stroke 0.3s ease, stroke-width 0.2s ease;
+}
