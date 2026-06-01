@@ -1576,13 +1576,24 @@ function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradi
           <div className="flex items-start gap-2">
             <span className="font-mono text-blue-300 w-10 shrink-0">{actLabel}′</span>
             <div className="flex-1 text-slate-500 leading-tight" style={{ fontSize: '9px' }}>
-              Local derivative f′(zⱼ) — how much the activation changes per unit of z.
+              {isOut
+                ? 'Shown for intuition only — not a separate factor in δ.'
+                : 'Local derivative f′(zⱼ) — how much the activation changes per unit of z.'}
             </div>
-            <span className={`font-mono shrink-0 ${dead || saturated ? 'text-red-400' : 'text-slate-200'}`}>
+            <span className={`font-mono shrink-0 ${!isOut && (dead || saturated) ? 'text-red-400' : 'text-slate-400'}`}>
               {f(dAdZ_j)}
             </span>
           </div>
-          {dead && (
+          {/* Output layer: informational note about BCE+σ shortcut */}
+          {isOut && (
+            <div className="text-slate-600 leading-tight" style={{ fontSize: '9px' }}>
+              Sigmoid′ shown for intuition only; BCE+sigmoid simplifies δ to ŷ−y, so this
+              derivative is already accounted for. Saturation affects output confidence and
+              model calibration, but δ is computed directly as ŷ−y regardless.
+            </div>
+          )}
+          {/* Hidden-layer dead / saturated warnings only */}
+          {!isOut && dead && (
             <div className="text-red-400 leading-tight" style={{ fontSize: '9px' }}>
               ⚠ Dead ReLU: z≤0 → f′=0. Gradient through this neuron is zero.
               For this sample, this path contributes no gradient. If the neuron is inactive
@@ -1590,7 +1601,7 @@ function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradi
               elsewhere makes z positive again.
             </div>
           )}
-          {!dead && saturated && (
+          {!isOut && !dead && saturated && (
             <div className="text-amber-400 leading-tight" style={{ fontSize: '9px' }}>
               ⚠ Saturated {actLabel}: f′≈0. Gradient barely flows — learning slows here.
             </div>
