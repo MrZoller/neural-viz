@@ -1625,11 +1625,11 @@ print("Weights loaded from neural-viz-params.json")`;
             <p>Frontier LLMs may contain <span className="text-amber-300 font-semibold">hundreds of billions to trillions of parameters</span> — the same broad kind of learned numbers you see here, just at vastly larger scale.</p>
             <p>In a transformer, learned <span className="text-blue-300">projection matrices</span> help compute attention: each token is transformed into query, key, and value vectors, and attention scores are computed dynamically from those vectors. That is much more complex than this XOR net, but it still relies on learned weight matrices.</p>
             <p>When you download a model checkpoint (e.g. a <code className="text-emerald-400 bg-slate-900/60 rounded px-0.5">.safetensors</code> file), you're downloading trained tensors: embeddings, attention weights, MLP/feed-forward weights, normalization parameters, and more. The architecture is fixed; the learned values are what training produces.</p>
-            <p className="text-slate-500">
+            <p className="text-slate-400">
               Your net: {network.weights.reduce((s, W) => s + W.length * W[0].length + W.length, 0)} params.
               Frontier LLMs: hundreds of billions to trillions. Same broad idea — learned tensors — scaled up enormously and arranged in a much more complex architecture.
             </p>
-            <p className="text-slate-600 border-t border-slate-700/60 pt-1.5 mt-0.5 italic">
+            <p className="text-slate-400 border-t border-slate-700/60 pt-1.5 mt-0.5 italic">
               This MLP is not architecturally equivalent to an LLM. The analogy is about learned tensors/parameters, not model structure.
             </p>
           </div>
