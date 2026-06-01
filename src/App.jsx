@@ -1396,22 +1396,66 @@ function WeightsInspector({ network, layerSizes, hiddenActivationTypes, epoch, t
   );
 
   const buildExport = () => {
+    // xor_solved: same logic as XorVerifyPanel — all 4 points predicted correctly
+    const xorSolved = xorResults ? xorResults.every(r => r.correct) : false;
+
+    // Derive which convergence criterion(a) fired, consistent with checkConvergence()
+    const convergenceReasons = [];
+    if (trainingStatus === 'converged') {
+      if (latestLoss !== null && latestLoss < CONVERGENCE_LOSS_THRESHOLD) {
+        convergenceReasons.push('loss_threshold');
+      }
+      if (xorResults && xorResults.every(r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE)) {
+        convergenceReasons.push('xor_verified');
+      }
+    }
+
+    // Per-point XOR verification detail
+    const xorVerification = xorResults
+      ? xorResults.map(r => ({
+          input:                 r.input,
+          expected:              r.label,
+          predicted_probability: r.rawOutput,
+          predicted_class:       r.predictedClass,
+          confidence:            r.confidence,
+          correct:               r.correct,
+        }))
+      : null;
+
     const layers = weights.map((W, l) => {
       const inSize  = layerSizes[l];
       const outSize = layerSizes[l + 1];
       const isOutput = l === weights.length - 1;
       return {
-        name:            isOutput ? 'output' : `hidden_${l + 1}`,
-        index:           l,
-        activation:      isOutput ? 'sigmoid' : (hiddenActivationTypes[l] || 'relu'),
-        weight_shape:    [outSize, inSize],
-        bias_shape:      [outSize],
-        weight:          W,
-        bias:            biases[l],
-        parameter_count: outSize * inSize + outSize,
+        name:              isOutput ? 'output' : `hidden_${l + 1}`,
+        index:             l,
+        activation:        isOutput ? 'sigmoid' : (hiddenActivationTypes[l] || 'relu'),
+        weight_shape:      [outSize, inSize],
+        weight_convention: 'weight[out_feature][in_feature] — same as nn.Linear.weight; no transposition needed',
+        bias_shape:        [outSize],
+        weight:            W,
+        bias:              biases[l],
+        parameter_count:   outSize * inSize + outSize,
       };
     });
-    const xorSolved = xorResults ? xorResults.every(r => Math.round(r.prediction) === r.label) : false;
+
+    const trainingObj = { epoch, loss: latestLoss, status: trainingStatus, xor_solved: xorSolved };
+    if (convergenceReasons.length === 1) trainingObj.convergence_reason = convergenceReasons[0];
+    if (convergenceReasons.length  > 1) trainingObj.convergence_reason = convergenceReasons;
+    // Explicitly note the "high-confidence, loss still above threshold" case so readers aren't confused
+    if (
+      trainingStatus === 'converged' &&
+      latestLoss !== null &&
+      latestLoss >= CONVERGENCE_LOSS_THRESHOLD &&
+      convergenceReasons.includes('xor_verified')
+    ) {
+      trainingObj.note =
+        `Converged via XOR confidence criterion (all 4 points correct with >${(CONVERGENCE_CONFIDENCE*100).toFixed(0)}% confidence ` +
+        `for ${CONVERGENCE_CONSECUTIVE_EPOCHS} consecutive epochs). Loss ${latestLoss.toFixed(5)} is above the ` +
+        `${CONVERGENCE_LOSS_THRESHOLD} threshold — that is expected for this convergence path.`;
+    }
+    if (xorVerification) trainingObj.xor_verification = xorVerification;
+
     return {
       exported_at:      new Date().toISOString(),
       source:           'Neural Network Learning Tool — neural-viz',
@@ -1420,7 +1464,7 @@ function WeightsInspector({ network, layerSizes, hiddenActivationTypes, epoch, t
         hidden_activations: hiddenActivationTypes,
         output_activation:  'sigmoid',
       },
-      training: { epoch, loss: latestLoss, status: trainingStatus, xor_solved: xorSolved },
+      training: trainingObj,
       layers,
       total_parameters: layers.reduce((s, l) => s + l.parameter_count, 0),
     };
