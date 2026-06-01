@@ -1,5 +1,5 @@
 // =============================================================================
-// Neural Network Learning Tool — Phase 2
+// Neural Net Playground
 // =============================================================================
 // All neural-network math is implemented from scratch in JavaScript.
 // No ML libraries. PyTorch snippets are explanatory text only.
@@ -317,7 +317,7 @@ function generateFullScript(layerSizes, hiddenActivationTypes, learningRate) {
 
   return `#!/usr/bin/env python3
 """
-XOR Neural Network — exported from Neural Network Learning Tool
+XOR Neural Network — exported from Neural Net Playground
 Architecture : ${layerSizes.slice(0, -1).join(' -> ')} -> 1
 Activations  : ${hiddenActivationTypes.join(', ')} + Sigmoid (output)
 Parameters   : ${paramCount}
@@ -464,9 +464,9 @@ function generateNotebook(layerSizes, hiddenActivationTypes, learningRate) {
       language_info: { name: 'python', version: '3.9.0' },
     },
     cells: [
-      md(`# XOR Neural Network — Neural Network Learning Tool Export
+      md(`# XOR Neural Network — Neural Net Playground Export
 
-This notebook was exported from the **Neural Network Learning Tool** — an interactive MLP
+This notebook was exported from **Neural Net Playground** — an interactive MLP
 simulator that trains on XOR using real backpropagation (no ML libraries).
 
 ## Configuration
@@ -2026,7 +2026,7 @@ function WeightsInspector({ network, layerSizes, hiddenActivationTypes, epoch, t
 
     return {
       exported_at:      new Date().toISOString(),
-      source:           'Neural Network Learning Tool — neural-viz',
+      source:           'Neural Net Playground — neural-viz',
       architecture: {
         layers:             layerSizes,
         hidden_activations: hiddenActivationTypes,
@@ -3075,8 +3075,8 @@ export default function App() {
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className="border-b border-slate-700 px-5 py-2.5 flex items-center justify-between flex-shrink-0">
         <div>
-          <h1 className="text-base font-bold text-white leading-tight">Neural Network Learning Tool</h1>
-          <p className="text-xs text-slate-500">Phase 2 — backprop visualization, step mode, confidence heatmap, click-to-predict</p>
+          <h1 className="text-base font-bold text-white leading-tight">Neural Net Playground</h1>
+          <p className="text-xs text-slate-500">Make the math visible.</p>
         </div>
         <div className="text-xs text-slate-500 font-mono">
           {layerSizes.join(' → ')}
