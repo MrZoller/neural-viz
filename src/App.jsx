@@ -1585,7 +1585,9 @@ function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradi
           {dead && (
             <div className="text-red-400 leading-tight" style={{ fontSize: '9px' }}>
               ⚠ Dead ReLU: z≤0 → f′=0. Gradient through this neuron is zero.
-              The weight cannot learn until the neuron "wakes up."
+              For this sample, this path contributes no gradient. If the neuron is inactive
+              for every training sample, its incoming weights will not learn until an update
+              elsewhere makes z positive again.
             </div>
           )}
           {!dead && saturated && (
