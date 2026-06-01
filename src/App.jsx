@@ -1851,7 +1851,8 @@ function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastFo
           <>
             <p>
               <span className="text-blue-400 font-semibold">ReLU(z)</span> = max(0, z).
-              Derivative is 1 for z&gt;0 and 0 for z≤0 — discontinuous but cheap to compute.
+              Derivative is 1 for z&gt;0 and 0 for z&lt;0. At z=0 ReLU is nondifferentiable;
+              this simulator and PyTorch use the convention f′(0)=0.
             </p>
             <p>
               <span className="text-red-400/80">Dead ReLU</span>: if z stays below 0 for all
