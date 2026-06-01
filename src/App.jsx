@@ -1854,10 +1854,10 @@ function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastFo
               Derivative is 1 for z&gt;0 and 0 for z≤0 — discontinuous but cheap to compute.
             </p>
             <p>
-              <span className="text-red-400/80">Dead ReLU</span>: if weights drive z permanently
-              below 0, the neuron always outputs 0 and its gradient is always 0. The weight
-              can never recover through gradient descent alone — reset or use a different
-              activation to fix it.
+              <span className="text-red-400/80">Dead ReLU</span>: if z stays below 0 for all
+              training samples, the neuron outputs 0 across the entire dataset and its incoming
+              weights receive no gradient — recovery through gradient descent alone is impossible.
+              Reset weights or switch activation to fix it.
             </p>
           </>
         )}
