@@ -1905,7 +1905,7 @@ function CalcPanel({ network, layerSizes, hiddenActivationTypes, lastGradients, 
       <div className="flex border border-slate-700 rounded overflow-hidden">
         {[
           { id: 'chain', label: '∂w Trace' },
-          { id: 'activ', label: 'σ(z) Plot' },
+          { id: 'activ', label: 'f(z) Plot' },
         ].map(({ id, label }) => (
           <button key={id} onClick={() => setSection(id)}
             className={`flex-1 py-1 text-xs font-medium transition-colors ${
