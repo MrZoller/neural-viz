@@ -8,6 +8,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Math core extracted from `App.jsx` into `src/nn/`** — activation functions, network (init/forward/loss/backprop/update/decision boundary), training/evaluation/convergence, and the finite-difference gradient check now live in dedicated, React-free modules (`activations.js`, `datasets.js`, `network.js`, `training.js`) re-exported through `src/nn/index.js`. Behaviour is unchanged; `App.jsx` imports the same functions it previously defined inline.
+
+### Added
+- **Unit test suite (Vitest)** — 37 tests covering the math core. `npm test` runs them. The centrepiece checks backpropagation against a symmetric finite-difference estimate, fuzzing across 40 random architectures and activation combinations to assert <1e-4 relative gradient error — the same correctness guarantee the UI's ∂w Check tab demonstrates, now enforced in CI-friendly tests.
+
 ### Planned
 - Gradient flow summary: per-layer average/max/min gradient magnitudes, dead-ReLU count, vanishing-gradient flag
 - Loss surface viewer: 2D slice over two selected weights with current-position marker

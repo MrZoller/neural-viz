@@ -109,7 +109,7 @@ npm run preview
 
 ## How It Works
 
-All neural-network math lives in `src/App.jsx` with detailed inline comments. The data flow:
+All neural-network math lives in `src/nn/` with detailed inline comments, separated from the React UI in `src/App.jsx`. The data flow:
 
 ```
 initNetwork()               Xavier-initialized weights, zero biases
@@ -147,7 +147,14 @@ neural-viz/
 ├── public/
 │   └── favicon.svg        # SVG favicon (2-2-1 network icon)
 ├── src/
-│   ├── App.jsx            # All math and components — single-file artifact
+│   ├── nn/                # Neural-network math core (no React, fully unit-tested)
+│   │   ├── activations.js # Activation functions + derivatives, activation curve
+│   │   ├── datasets.js    # XOR dataset
+│   │   ├── network.js     # initNetwork, forwardPass, loss, backprop, update, boundary
+│   │   ├── training.js    # trainOneEpoch, evaluateXOR, convergence, gradient check
+│   │   ├── index.js       # Public surface (barrel) imported by App.jsx
+│   │   └── __tests__/     # Vitest suites (activations, network, training)
+│   ├── App.jsx            # All UI components — imports the math from src/nn
 │   ├── main.jsx           # React root mount
 │   └── index.css          # Tailwind directives + minimal animation helpers
 ├── index.html
@@ -157,27 +164,38 @@ neural-viz/
 └── postcss.config.js
 ```
 
-`App.jsx` is organized into numbered sections followed by components:
+### Math core (`src/nn/`)
 
-| Section | Contents |
+The from-scratch neural-network math is isolated from the UI so it can be read
+and tested on its own. Nothing in `src/nn/` imports React.
+
+| Module | Contents |
 |---|---|
-| 1 | Activation functions (ReLU, Tanh, Sigmoid) with exact derivatives |
-| 2 | XOR dataset |
-| 3 | Network initialization (Xavier / Glorot) |
-| 4 | Forward pass |
-| 5 | BCE loss |
-| 6 | Backpropagation |
-| 7 | Gradient descent weight update |
-| 8 | One training epoch (full batch) |
-| 9 | Decision boundary computation |
-| 10 | PyTorch code generator |
-| 10b | Export utilities (full `.py` script + `.ipynb` notebook) |
-| 11 | Color utilities (activation, gradient, boundary, weight) |
-| 12 | SVG network graph layout |
-| 13 | XOR evaluation |
-| 14 | Convergence / stop conditions |
-| 15 | Calculus panel utilities (activation curve generator) |
-| 16 | Finite-difference gradient check |
+| `activations.js` | Activation functions (ReLU, Tanh, Sigmoid) with exact derivatives; activation-curve generator for the calculus panel |
+| `datasets.js` | XOR dataset |
+| `network.js` | Network initialization (Xavier / Glorot), forward pass, BCE loss, backpropagation, gradient-descent update, decision-boundary computation |
+| `training.js` | One full-batch training epoch, XOR evaluation, convergence / stop conditions, finite-difference gradient check |
+
+`App.jsx` holds the React components (in order of declaration: `NetworkGraph`,
+`DecisionBoundaryCanvas`, `ConceptCallout`, `XorVerifyPanel`, `MathAuditPanel`,
+`GradientCheckPanel`, `ChainRuleTracer`, `ActivationExplorer`, `CalcPanel`,
+`WeightsInspector`, `TrainingStatusBar`, `App`) plus the PyTorch code/notebook
+generators and the SVG colour/layout helpers.
+
+### Tests
+
+```bash
+npm test          # run the Vitest suite once
+npm run test:watch
+```
+
+The suite (37 tests) covers the math core directly. Its centrepiece verifies
+backpropagation against a symmetric finite-difference estimate — the same check
+exposed in the UI's **∂w Check** tab — fuzzing across 40 randomly generated
+architectures and activation combinations to assert that every analytical
+gradient agrees with the numerical one to within ~1e-4 relative error. Because
+the whole project's pitch is "every number is real math," these tests are the
+proof.
 
 Components (in order of declaration): `NetworkGraph`, `DecisionBoundaryCanvas`, `ConceptCallout`, `XorVerifyPanel`, `MathAuditPanel`, `GradientCheckPanel`, `ChainRuleTracer`, `ActivationExplorer`, `CalcPanel`, `WeightsInspector`, `TrainingStatusBar`, and the main `App`.
 
@@ -191,8 +209,9 @@ Components (in order of declaration): `NetworkGraph`, `DecisionBoundaryCanvas`, 
 | Vite | 5 | Dev server and production build |
 | Tailwind CSS | 3 | Utility-first styling |
 | Recharts | 2 | Loss curve and activation function plots |
+| Vitest | 2 | Unit tests for the math core (dev only) |
 
-No ML libraries are used at runtime. All neural-network math — initialization, forward pass, backpropagation, gradient descent — is implemented from scratch in plain JavaScript.
+No ML libraries are used at runtime. All neural-network math — initialization, forward pass, backpropagation, gradient descent — is implemented from scratch in plain JavaScript in `src/nn/` and verified by the Vitest suite.
 
 ---
 
