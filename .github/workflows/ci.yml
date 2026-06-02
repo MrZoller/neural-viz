@@ -1,8 +1,11 @@
 name: CI
 
 on:
+  # Pushes to main are covered by the Pages workflow (which also tests + builds
+  # before deploying), so CI here gates pull requests and non-main branch pushes
+  # to avoid running the full test + build twice on every push to main.
   push:
-    branches: [main]
+    branches-ignore: [main]
   pull_request:
 
 jobs:

@@ -32,7 +32,11 @@ This guide walks you through every feature of the Neural Net Playground: configu
 
 ## Getting Started
 
+**Live demo:** [https://mrzoller.github.io/neural-viz/](https://mrzoller.github.io/neural-viz/) — runs entirely in your browser, nothing to install.
+
 ### Prerequisites
+
+To run locally:
 
 - Node.js 18 or later
 - npm 9 or later

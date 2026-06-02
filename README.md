@@ -4,7 +4,7 @@
 
 **[Live demo → https://mrzoller.github.io/neural-viz/](https://mrzoller.github.io/neural-viz/)**
 
-An interactive, browser-based neural-network visualizer. Train multilayer perceptrons on eight datasets (XOR through spirals), choose from four optimizers, step through the chain rule one term at a time, inspect the loss surface, verify gradients numerically, and export your model to PyTorch — all backed by real mathematics implemented in plain JavaScript.
+An interactive, browser-based neural-network visualizer. Train multilayer perceptrons on eight datasets (logical gates plus geometric sets), choose from four optimizers, step through the chain rule one term at a time, inspect the loss surface, verify gradients numerically, and export your model to PyTorch — all backed by real mathematics implemented in plain JavaScript.
 
 No ML libraries. No backend. No mocked values. Every number you see is computed from first principles.
 
@@ -73,7 +73,7 @@ Convergence auto-stops when loss drops below 0.001, or when every point in the a
 
 **∂w Trace (Chain Rule Tracer)**
 
-Select any weight W[layer][j][k] and any XOR input sample. The panel re-runs a live forward + backprop to show:
+Select any weight W[layer][j][k] and any input sample from the active dataset. The panel re-runs a live forward + backprop to show:
 - Symbolic formula: `∂L/∂w = δⱼ · aₖ`
 - Per-term numeric breakdown: aₖ (incoming activation), zⱼ + f′(zⱼ), δⱼ
 - Dead ReLU and saturation warnings where applicable
@@ -81,7 +81,7 @@ Select any weight W[layer][j][k] and any XOR input sample. The panel re-runs a l
 
 **f(z) Plot (Activation Function Explorer)**
 
-Select any neuron and XOR input. Plots:
+Select any neuron and input sample. Plots:
 - f(z) curve and f′(z) derivative overlay (toggleable)
 - Tangent line at the current z value
 - Reference markers for z, f(z), f′(z)
@@ -91,14 +91,14 @@ Select any neuron and XOR input. Plots:
 
 - Architecture/optimizer/activation mapping summary
 - **Copy Script**: complete runnable `.py` file
-- **Export Notebook**: `.ipynb` (nbformat v4, 18 cells) covering imports, training, loss curve, XOR verification, decision boundary, and inference
+- **Notebook**: downloads `neural-viz-<dataset>.ipynb` (nbformat v4, 18 cells) covering imports, training, loss curve, per-point verification, decision boundary, and inference
 - Collapsible full code block
 
 ### Weights / Parameters Inspector
 
 - Per-layer weight matrices: color-coded by sign and magnitude
 - `W[out_feature][in_feature]` — same shape as `nn.Linear.weight`; no transposition needed when loading into PyTorch
-- **Copy JSON / Download JSON** → `neural-viz-params.json`: weights, biases, architecture, training state, per-point XOR verification, and convergence reason
+- **Copy JSON / Download JSON** → `neural-viz-params.json`: weights, biases, architecture, training state, per-point verification (`xor_verification` field, for the active dataset), and convergence reason
 - Collapsible LLM analogy and PyTorch weight-loading snippet
 
 ---
@@ -172,11 +172,13 @@ neural-viz/
 ├── src/
 │   ├── nn/                # Neural-network math core (no React, fully unit-tested)
 │   │   ├── activations.js # Activation functions + derivatives, activation curve
-│   │   ├── datasets.js    # XOR dataset
+│   │   ├── datasets.js    # Dataset registry (logical gates + geometric generators)
 │   │   ├── network.js     # initNetwork, forwardPass, loss, backprop, update, boundary
-│   │   ├── training.js    # trainOneEpoch, evaluateXOR, convergence, gradient check
+│   │   ├── optimizers.js  # SGD, Momentum, RMSProp, Adam (buffers + update rules)
+│   │   ├── training.js    # trainOneEpoch, dataset evaluation, convergence, gradient check
+│   │   ├── surface.js     # 2-D loss-surface slice + descent-path tracer
 │   │   ├── index.js       # Public surface (barrel) imported by App.jsx
-│   │   └── __tests__/     # Vitest suites (activations, network, training, optimizers, surface)
+│   │   └── __tests__/     # Vitest suites (activations, datasets, network, training, optimizers, surface)
 │   ├── lessons.js         # Guided-lesson content (data) + its test in src/__tests__
 │   ├── App.jsx            # All UI components — imports the math from src/nn
 │   ├── main.jsx           # React root mount

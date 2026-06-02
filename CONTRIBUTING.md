@@ -9,7 +9,7 @@ Thank you for your interest in contributing to Neural Net Playground. This proje
 1. **No fake math.** If a value is displayed to the user, it must be computed. If something is simplified or approximated, label it clearly in both the UI and the code comments.
 2. **Prefer readable over clever.** This codebase is read by people learning neural networks, not just experienced engineers. Verbose and clear beats compact and opaque.
 3. **Comment the why, not the what.** Well-named functions explain themselves. Comments should explain the mathematical reason a step exists, not restate what the code does.
-4. **Stay single-file.** All React components and math functions live in `src/App.jsx`. Do not split into multiple component files without discussion — the single-file structure is intentional so learners can read the full implementation in one place.
+4. **Keep the math core separate from the UI.** The React-free neural-network math lives in focused modules under `src/nn/` (`activations`, `datasets`, `network`, `optimizers`, `training`, `surface`) plus the guided-lesson data in `src/lessons.js`; all UI components live in `src/App.jsx`. Keep math out of the UI so it stays independently readable and unit-testable.
 
 ---
 
@@ -48,10 +48,9 @@ Check the [open issues](https://github.com/MrZoller/neural-viz/issues) and the `
 **Larger contributions — discuss first:**
 
 - Gradient flow summary (per-layer gradient magnitude statistics)
-- Loss surface viewer (2D slice over two selected weights)
-- Changing the training dataset beyond XOR
-- Adding a second optimizer (Adam, RMSProp)
 - Adding a second loss function
+- Mini-batch / stochastic gradient descent as an optional mode
+- New datasets or activation functions
 
 Open an issue before starting significant work so we can align on the approach.
 
@@ -60,10 +59,11 @@ Open an issue before starting significant work so we can align on the approach.
 ## Submitting a Pull Request
 
 1. Fork the repository and create a branch from `main`.
-2. Make your changes in `src/App.jsx` (and supporting files if needed).
-3. Verify the build passes: `npm run build`.
-4. Test manually: train to convergence, animate a forward pass, click to infer, change the architecture.
-5. Fill out the pull request template.
+2. Make your changes — math in `src/nn/` (or `src/lessons.js`), UI in `src/App.jsx`.
+3. Run the test suite: `npm test` (69 tests). Add or update tests for any math change.
+4. Verify the build passes: `npm run build`.
+5. Test manually: train to convergence, animate a forward pass, click to infer, change the architecture.
+6. Fill out the pull request template.
 
 ### Commit message style
 
@@ -84,7 +84,7 @@ guard so it doesn't fire before the first meaningful gradient update.
 - **No TypeScript** — plain JavaScript for maximum accessibility to learners
 - **React hooks only** — no class components
 - **Tailwind for all styling** — no inline style objects except where dynamic values require them
-- **No extra dependencies** — the only runtime dependencies are React, Recharts, and Tailwind
+- **No extra dependencies** — the only runtime dependencies are React, React-DOM, and Recharts (Tailwind, Vite, and Vitest are dev-only)
 
 ---
 

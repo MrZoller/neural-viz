@@ -90,7 +90,7 @@ function pyOptimizer(optimizerType, lr) {
   }
 }
 
-function generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec, optimizerType = 'sgd') {
+function generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec, optimizerType = 'sgd', learningRate = 0.1) {
   const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
   const pts  = datasetToPython(dataset);
   const name = datasetSpec?.label || 'dataset';
@@ -112,7 +112,7 @@ model = nn.Sequential(
 ${layers})
 
 criterion = nn.BCELoss()
-optimizer = ${pyOptimizer(optimizerType, 0.1).ctor}
+optimizer = ${pyOptimizer(optimizerType, learningRate).ctor}
 
 # Dataset: ${name} (${dataset.length} points, from the playground)
 X = torch.tensor(${pts.X}, dtype=torch.float)
@@ -1329,7 +1329,7 @@ function LossSurfacePanel({ network, hiddenActivationTypes, dataset, lastGradien
 //   where δⱼ = ∂L/∂zⱼ  (error signal at destination neuron's pre-activation)
 //         aₖ = activations[l][k]  (incoming activation through this weight)
 //
-// The stored lastGradients.dWeights are *averaged* over all 4 XOR samples.
+// The stored lastGradients.dWeights are *averaged* over all dataset samples.
 // The trace below shows per-sample values for the selected input, with a
 // comparison to the batch-average gradient that actually drives training.
 // =============================================================================
@@ -1576,7 +1576,7 @@ function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, dataset, 
           <span className="text-slate-500">this sample:</span>
           <span className="text-emerald-400">{f(sampleGrad)}</span>
           <span className="text-slate-700">|</span>
-          <span className="text-slate-500">batch avg (×4):</span>
+          <span className="text-slate-500">batch avg (×{dataset.length}):</span>
           <span className="text-blue-400">{f(avgGrad)}</span>
         </div>
         <div className="text-slate-600 leading-tight" style={{ fontSize: '9px' }}>
@@ -1915,7 +1915,7 @@ function WeightsInspector({ network, layerSizes, hiddenActivationTypes, epoch, t
   );
 
   const buildExport = () => {
-    // xor_solved: same logic as XorVerifyPanel — all 4 points predicted correctly
+    // xor_solved: same logic as XorVerifyPanel — all points predicted correctly
     const xorSolved = xorResults ? xorResults.every(r => r.correct) : false;
 
     // Derive which convergence criterion(a) fired, consistent with checkConvergence()
@@ -2478,7 +2478,7 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, optimiz
         <div className="bg-gray-950 border-t border-slate-800 overflow-y-auto"
              style={{ maxHeight: '220px' }}>
           <pre className="text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap p-3">
-            {generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec, optimizerType)}
+            {generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec, optimizerType, learningRate)}
           </pre>
         </div>
       )}
@@ -3484,10 +3484,10 @@ export default function App() {
                 {stepModeStage === 'forward' && (
                   <div>
                     <div className={`font-bold ${col.title} mb-0.5`}>
-                      → Forward Pass <span className="font-mono font-normal text-slate-400">input = [0, 0]</span>
+                      → Forward Pass <span className="font-mono font-normal text-slate-400">input = [{dataset[0].input.map(v => Number.isInteger(v) ? v : v.toFixed(2)).join(', ')}]</span>
                     </div>
                     <div className="text-slate-300">Each neuron computes <span className="font-mono text-blue-200">z = W·x + b</span> then <span className="font-mono text-blue-200">a = activation(z)</span>. Watch values light up left→right.</div>
-                    <div className="mt-1 font-mono text-blue-400">out = model([0,0])  →  p(class=1) shown on output neuron</div>
+                    <div className="mt-1 font-mono text-blue-400">out = model(x₀)  →  p(class=1) shown on output neuron</div>
                   </div>
                 )}
                 {stepModeStage === 'loss' && (
@@ -3495,7 +3495,7 @@ export default function App() {
                     <div className={`font-bold ${col.title} mb-0.5`}>📊 Loss Calculation</div>
                     <div className="text-slate-300">Binary Cross-Entropy penalizes wrong-confident predictions harshly. Lower = better fit to the training samples.</div>
                     <div className="mt-1 font-mono text-amber-400">
-                      L = −(1/4)·Σ[y·log(ŷ)+(1−y)·log(1−ŷ)] = <span className="text-amber-200 font-bold">{stepModeLoss?.toFixed(6)}</span>
+                      L = −(1/{dataset.length})·Σ[y·log(ŷ)+(1−y)·log(1−ŷ)] = <span className="text-amber-200 font-bold">{stepModeLoss?.toFixed(6)}</span>
                     </div>
                   </div>
                 )}
@@ -3676,7 +3676,7 @@ export default function App() {
                 <div className="text-xs text-slate-500 font-mono mt-1">
                   Initial {lossHistory[0]?.loss.toFixed(4)} → Current {latestLoss?.toFixed(4)}
                   <span className="text-slate-600 ml-2">(green line = {CONVERGENCE_LOSS_THRESHOLD} target)</span>
-                  {trainingStatus === 'converged' && <span className="text-emerald-400 ml-2">✓ XOR solved</span>}
+                  {trainingStatus === 'converged' && <span className="text-emerald-400 ml-2">✓ {datasetSpec.label} solved</span>}
                 </div>
               )}
             </div>
