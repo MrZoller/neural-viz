@@ -14,246 +14,86 @@
 //   dW[l]     = gradient of loss w.r.t. W[l]
 // =============================================================================
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   ReferenceLine, ReferenceDot,
 } from 'recharts';
 
 // =============================================================================
-// SECTION 1 — ACTIVATION FUNCTIONS
-// Each entry has: fn (the activation), derivative (its derivative w.r.t. input)
-// These are the exact functions PyTorch uses under the hood.
+// NEURAL-NETWORK MATH CORE
+// All from-scratch math (activations, forward pass, loss, backprop, gradient
+// descent, evaluation, convergence and the finite-difference gradient check)
+// lives in src/nn/ and is unit-tested there. No ML libraries.
 // =============================================================================
-const ACTIVATIONS = {
-  relu: {
-    label: 'ReLU',
-    fn: x => Math.max(0, x),
-    derivative: x => (x > 0 ? 1 : 0),
-    color: '#60a5fa',
-  },
-  tanh: {
-    label: 'Tanh',
-    fn: x => Math.tanh(x),
-    derivative: x => 1 - Math.tanh(x) ** 2,
-    color: '#a78bfa',
-  },
-  sigmoid: {
-    label: 'Sigmoid',
-    // σ(x) = 1/(1+e^−x). Derivative σ(x)·(1−σ(x)) peaks at 0.25 — causes
-    // vanishing gradients in deep nets when used in hidden layers.
-    fn: x => 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, x)))),
-    derivative: x => {
-      const s = 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, x))));
-      return s * (1 - s);
-    },
-    color: '#f472b6',
-  },
-};
-
-// =============================================================================
-// SECTION 2 — XOR DATASET
-// =============================================================================
-const XOR_DATA = [
-  { input: [0, 0], label: 0 },
-  { input: [0, 1], label: 1 },
-  { input: [1, 0], label: 1 },
-  { input: [1, 1], label: 0 },
-];
-
-// =============================================================================
-// SECTION 3 — NETWORK INITIALIZATION
-// Xavier (Glorot): scale = sqrt(2 / (fan_in + fan_out))
-// =============================================================================
-function initNetwork(layerSizes) {
-  const weights = [];
-  const biases = [];
-  for (let l = 0; l < layerSizes.length - 1; l++) {
-    const fanIn  = layerSizes[l];
-    const fanOut = layerSizes[l + 1];
-    const scale  = Math.sqrt(2.0 / (fanIn + fanOut));
-    const W = Array.from({ length: fanOut }, () =>
-      Array.from({ length: fanIn }, () => (Math.random() * 2 - 1) * scale)
-    );
-    weights.push(W);
-    biases.push(new Array(fanOut).fill(0));
-  }
-  return { weights, biases };
-}
-
-// =============================================================================
-// SECTION 4 — FORWARD PASS
-// Propagates one input vector through all layers, storing z and a at every step.
-// Returns all intermediates so backprop can reuse them without re-computing.
-// =============================================================================
-function forwardPass(input, weights, biases, hiddenActivationTypes) {
-  const activations    = [input];
-  const preActivations = [null];
-  const L = weights.length;
-  for (let l = 0; l < L; l++) {
-    const W     = weights[l];
-    const b     = biases[l];
-    const prevA = activations[l];
-    const z = W.map((row, j) => {
-      let sum = b[j];
-      for (let k = 0; k < prevA.length; k++) sum += row[k] * prevA[k];
-      return sum;
-    });
-    const isOutput     = l === L - 1;
-    const activType    = isOutput ? 'sigmoid' : (hiddenActivationTypes[l] || 'relu');
-    const activationFn = ACTIVATIONS[activType].fn;
-    preActivations.push(z);
-    activations.push(z.map(activationFn));
-  }
-  return { activations, preActivations };
-}
-
-// =============================================================================
-// SECTION 5 — LOSS FUNCTION
-// Binary Cross-Entropy: L = −(1/N)·Σ[y·log(ŷ)+(1−y)·log(1−ŷ)]
-// =============================================================================
-function computeLoss(predictions, targets) {
-  const eps = 1e-12;
-  let total = 0;
-  for (let i = 0; i < predictions.length; i++) {
-    const p = Math.max(eps, Math.min(1 - eps, predictions[i][0]));
-    const y = targets[i];
-    total -= y * Math.log(p) + (1 - y) * Math.log(1 - p);
-  }
-  return total / predictions.length;
-}
-
-// =============================================================================
-// SECTION 6 — BACKPROPAGATION
-// δ[L] = a[L]−y  (BCE+sigmoid shortcut, cancels σ' in output layer)
-// δ[l] = (W[l]ᵀ·δ[l+1]) ⊙ activation'(z[l])
-// dW[l] = δ[l+1]·a[l]ᵀ
-// =============================================================================
-function backprop(targets, activations, preActivations, weights, hiddenActivationTypes) {
-  const L = weights.length;
-  const dWeights = weights.map(W => W.map(row => row.map(() => 0)));
-  const dBiases  = weights.map(W => new Array(W.length).fill(0));
-  const deltas   = new Array(L + 1).fill(null);
-
-  deltas[L] = activations[L].map((val, j) => val - targets[j]);
-
-  for (let l = L - 1; l >= 1; l--) {
-    const activType = hiddenActivationTypes[l - 1] || 'relu';
-    const actDeriv  = ACTIVATIONS[activType].derivative;
-    const z         = preActivations[l];
-    const nextDelta = deltas[l + 1];
-    const nextW     = weights[l];
-    deltas[l] = z.map((zVal, j) => {
-      let sum = 0;
-      for (let k = 0; k < nextDelta.length; k++) sum += nextW[k][j] * nextDelta[k];
-      return sum * actDeriv(zVal);
-    });
-  }
-
-  for (let l = 0; l < L; l++) {
-    const delta = deltas[l + 1];
-    const prevA = activations[l];
-    for (let j = 0; j < delta.length; j++) {
-      for (let k = 0; k < prevA.length; k++) dWeights[l][j][k] += delta[j] * prevA[k];
-      dBiases[l][j] += delta[j];
-    }
-  }
-
-  return { dWeights, dBiases, deltas };
-}
-
-// =============================================================================
-// SECTION 7 — GRADIENT DESCENT UPDATE
-// W[l] ← W[l] − lr · ∂L/∂W[l]
-// =============================================================================
-function updateWeights(weights, biases, dWeights, dBiases, lr) {
-  return {
-    weights: weights.map((W, l) =>
-      W.map((row, j) => row.map((w, k) => w - lr * dWeights[l][j][k]))
-    ),
-    biases: biases.map((b, l) =>
-      b.map((val, j) => val - lr * dBiases[l][j])
-    ),
-  };
-}
-
-// =============================================================================
-// SECTION 8 — ONE TRAINING EPOCH (FULL BATCH)
-// Forward → accumulate gradients → average → update weights.
-// =============================================================================
-function trainOneEpoch(weights, biases, hiddenActivationTypes, lr) {
-  const L = weights.length;
-  const N = XOR_DATA.length;
-
-  const totalDW = weights.map(W => W.map(row => row.map(() => 0)));
-  const totalDB = weights.map(W => new Array(W.length).fill(0));
-
-  const allPredictions = [];
-  const allTargets     = [];
-  const allForwardData = [];
-
-  for (const { input, label } of XOR_DATA) {
-    const { activations, preActivations } = forwardPass(
-      input, weights, biases, hiddenActivationTypes
-    );
-    allPredictions.push(activations[L]);
-    allTargets.push(label);
-    allForwardData.push({ activations, preActivations });
-
-    const { dWeights, dBiases } = backprop(
-      [label], activations, preActivations, weights, hiddenActivationTypes
-    );
-    for (let l = 0; l < L; l++) {
-      for (let j = 0; j < dWeights[l].length; j++) {
-        for (let k = 0; k < dWeights[l][j].length; k++) totalDW[l][j][k] += dWeights[l][j][k];
-        totalDB[l][j] += dBiases[l][j];
-      }
-    }
-  }
-
-  const avgDW = totalDW.map(W => W.map(row => row.map(v => v / N)));
-  const avgDB = totalDB.map(b => b.map(v => v / N));
-
-  const { weights: newWeights, biases: newBiases } = updateWeights(
-    weights, biases, avgDW, avgDB, lr
-  );
-
-  return {
-    weights:     newWeights,
-    biases:      newBiases,
-    loss:        computeLoss(allPredictions, allTargets),
-    avgDW,
-    avgDB,
-    allForwardData,
-  };
-}
-
-// =============================================================================
-// SECTION 9 — DECISION BOUNDARY COMPUTATION
-// Samples a gridSize×gridSize grid over [0,1]² using real forward passes.
-// y-axis flipped: row=0 → x₂=1 (canvas top), matching cy = (1−x₂)·H convention.
-// =============================================================================
-function computeDecisionBoundary(weights, biases, hiddenActivationTypes, gridSize = 40) {
-  const L    = weights.length;
-  const grid = [];
-  for (let row = 0; row < gridSize; row++) {
-    const gridRow = [];
-    for (let col = 0; col < gridSize; col++) {
-      const x1 = col / (gridSize - 1);
-      const x2 = 1 - row / (gridSize - 1); // flip so row=0 is x₂=1 (top)
-      const { activations } = forwardPass([x1, x2], weights, biases, hiddenActivationTypes);
-      gridRow.push(activations[L][0]);
-    }
-    grid.push(gridRow);
-  }
-  return grid;
-}
+import {
+  ACTIVATIONS,
+  XOR_DATA,
+  DATASETS,
+  DEFAULT_DATASET_OPTS,
+  makeDataset,
+  OPTIMIZERS,
+  createOptimizer,
+  cloneOptimizer,
+  initNetwork,
+  forwardPass,
+  computeLoss,
+  backprop,
+  updateWeights,
+  trainOneEpoch,
+  runOptimizerComparison,
+  computeLossSurface,
+  computeDescentPath,
+  computeDecisionBoundary,
+  evaluateDataset,
+  checkConvergence,
+  computeActivationCurve,
+  runGradientCheck,
+  CONVERGENCE_LOSS_THRESHOLD,
+  CONVERGENCE_CONSECUTIVE_EPOCHS,
+  CONVERGENCE_CONFIDENCE,
+  PLATEAU_PATIENCE,
+  MIN_IMPROVEMENT,
+  PLATEAU_MIN_LOSS,
+} from './nn/index.js';
+import { LESSONS } from './lessons.js';
 
 // =============================================================================
 // SECTION 10 — PYTORCH CODE GENERATOR
 // =============================================================================
-function generatePyTorchCode(layerSizes, hiddenActivationTypes) {
+
+// Format a dataset's points as Python tensor literals so the exported code
+// trains on exactly what the UI shows. Small datasets (logical gates) stay on
+// one line; generated datasets are written one point per line.
+function datasetToPython(dataset) {
+  const fmt = v => Number.isInteger(v) ? `${v}` : `${+v.toFixed(4)}`;
+  if (dataset.length <= 8) {
+    return {
+      X: '[' + dataset.map(d => `[${d.input.map(fmt).join(', ')}]`).join(', ') + ']',
+      y: '[' + dataset.map(d => `[${d.label}]`).join(', ') + ']',
+    };
+  }
+  return {
+    X: '[\n' + dataset.map(d => `    [${d.input.map(fmt).join(', ')}],`).join('\n') + '\n]',
+    y: '[\n' + dataset.map(d => `    [${d.label}],`).join('\n') + '\n]',
+  };
+}
+
+// Map the playground's optimizer choice to the matching PyTorch constructor,
+// using the same hyper-parameters as src/nn/optimizers.js.
+function pyOptimizer(optimizerType, lr) {
+  switch (optimizerType) {
+    case 'momentum': return { ctor: `torch.optim.SGD(model.parameters(), lr=${lr}, momentum=0.9)`, label: 'SGD + momentum' };
+    case 'rmsprop':  return { ctor: `torch.optim.RMSprop(model.parameters(), lr=${lr}, alpha=0.99)`, label: 'RMSprop' };
+    case 'adam':     return { ctor: `torch.optim.Adam(model.parameters(), lr=${lr}, betas=(0.9, 0.999))`, label: 'Adam' };
+    default:         return { ctor: `torch.optim.SGD(model.parameters(), lr=${lr})`, label: 'SGD' };
+  }
+}
+
+function generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec, optimizerType = 'sgd') {
   const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
+  const pts  = datasetToPython(dataset);
+  const name = datasetSpec?.label || 'dataset';
   let layers = '';
   layers += `    nn.Linear(${layerSizes[0]}, ${layerSizes[1]}),  # W: [${layerSizes[1]}×${layerSizes[0]}]\n`;
   layers += `    ${actMap[hiddenActivationTypes[0]] || 'nn.ReLU()'},\n`;
@@ -267,18 +107,16 @@ function generatePyTorchCode(layerSizes, hiddenActivationTypes) {
 
   return `import torch, torch.nn as nn
 
-# Architecture: ${layerSizes.join(' → ')} → 1
+# Architecture: ${layerSizes.join(' → ')}
 model = nn.Sequential(
 ${layers})
 
 criterion = nn.BCELoss()
-optimizer = torch.optim.SGD(
-    model.parameters(), lr=0.1)
+optimizer = ${pyOptimizer(optimizerType, 0.1).ctor}
 
-X = torch.tensor(
-    [[0,0],[0,1],[1,0],[1,1]], dtype=torch.float)
-y = torch.tensor(
-    [[0],[1],[1],[0]],         dtype=torch.float)
+# Dataset: ${name} (${dataset.length} points, from the playground)
+X = torch.tensor(${pts.X}, dtype=torch.float)
+y = torch.tensor(${pts.y}, dtype=torch.float)
 
 for epoch in range(max_epochs):
     optimizer.zero_grad()    # clear ∂L/∂W
@@ -300,8 +138,12 @@ for epoch in range(max_epochs):
 // randomly. The architecture and hyper-parameters do match the current UI.
 // =============================================================================
 
-function generateFullScript(layerSizes, hiddenActivationTypes, learningRate) {
+function generateFullScript(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec, optimizerType = 'sgd') {
   const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
+  const pts  = datasetToPython(dataset);
+  const name = datasetSpec?.label || 'Dataset';
+  const desc = datasetSpec?.description || '';
+  const opt  = pyOptimizer(optimizerType, learningRate);
   const paramCount = layerSizes.slice(0, -1).reduce(
     (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
   );
@@ -317,14 +159,15 @@ function generateFullScript(layerSizes, hiddenActivationTypes, learningRate) {
 
   return `#!/usr/bin/env python3
 """
-XOR Neural Network — exported from Neural Net Playground
+${name} Neural Network — exported from Neural Net Playground
 Architecture : ${layerSizes.slice(0, -1).join(' -> ')} -> 1
 Activations  : ${hiddenActivationTypes.join(', ')} + Sigmoid (output)
 Parameters   : ${paramCount}
 Learning rate: ${learningRate}
+Dataset      : ${name} (${dataset.length} points)
 
 Note: weights are randomly re-initialized, not copied from the simulator.
-      Re-run until convergence — this architecture reliably solves XOR.
+      The dataset points below are exactly the ones shown in the playground.
 """
 import torch
 import torch.nn as nn
@@ -333,9 +176,10 @@ import matplotlib.pyplot as plt
 torch.manual_seed(42)  # remove for random init each run
 
 # -- Dataset ------------------------------------------------------------------
-# XOR: output is 1 iff exactly one input is 1 (not linearly separable).
-X = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=torch.float)
-y = torch.tensor([[0],    [1],    [1],    [0]],     dtype=torch.float)
+# ${desc}
+X = torch.tensor(${pts.X}, dtype=torch.float)
+y = torch.tensor(${pts.y}, dtype=torch.float)
+print(f"Dataset: {X.shape[0]} points")
 
 # -- Model --------------------------------------------------------------------
 # nn.Linear(in, out) creates weight matrix W [out x in] and bias b [out].
@@ -347,16 +191,16 @@ print(f"Parameters: {sum(p.numel() for p in model.parameters())}")
 
 # -- Loss and optimizer -------------------------------------------------------
 # BCELoss: L = -(1/N) * sum[y*log(y_hat) + (1-y)*log(1-y_hat)]
-# SGD:     W <- W - lr * dL/dW   (same update rule as the simulator)
+# Optimizer: ${opt.label} (matches the optimizer selected in the playground)
 criterion = nn.BCELoss()
-optimizer  = torch.optim.SGD(model.parameters(), lr=${learningRate})
+optimizer  = ${opt.ctor}
 
 # -- Training loop ------------------------------------------------------------
 losses = []
 for epoch in range(10_000):
     optimizer.zero_grad()        # clear accumulated gradients
     out  = model(X)              # forward pass (activations left -> right)
-    loss = criterion(out, y)     # BCE loss over all 4 XOR samples
+    loss = criterion(out, y)     # BCE loss over all samples
     loss.backward()              # backprop: dL/dW via chain rule
     optimizer.step()             # W <- W - lr * dL/dW
     losses.append(loss.item())
@@ -370,17 +214,17 @@ else:
 plt.figure(figsize=(8, 3))
 plt.plot(losses, lw=1, color="#60a5fa", label="BCE Loss")
 plt.axhline(0.001, color="#10b981", ls="--", lw=1, label="convergence (0.001)")
-plt.xlabel("Epoch"); plt.ylabel("BCE Loss"); plt.title("XOR Training Loss")
+plt.xlabel("Epoch"); plt.ylabel("BCE Loss"); plt.title("${name} Training Loss")
 plt.legend(); plt.tight_layout(); plt.show()
 
-# -- XOR verification ---------------------------------------------------------
+# -- Verification -------------------------------------------------------------
 # model.eval() disables training-only layers (none here, but good practice).
 # torch.no_grad() skips gradient tracking during inference.
 model.eval()
 with torch.no_grad():
     preds = model(X)
 
-print("\\nXOR Verification:")
+print("\\n${name} Verification:")
 print(f"{'Input':<12} {'Expected':<10} {'p(class=1)':<14} {'Class':<8} Correct?")
 print("-" * 55)
 all_correct = True
@@ -425,8 +269,13 @@ print(f"\\nInference: {test_pt.tolist()[0]} -> p(1)={prob:.4f}, "
 // Generates an .ipynb JSON that Jupyter can open directly.
 // Architecture, activations, and learning rate match the current UI state.
 // Each cell's source is an array of line-strings as the nbformat v4 spec requires.
-function generateNotebook(layerSizes, hiddenActivationTypes, learningRate) {
+function generateNotebook(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec, optimizerType = 'sgd') {
   const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
+  const pts     = datasetToPython(dataset);
+  const name    = datasetSpec?.label || 'Dataset';
+  const desc    = datasetSpec?.description || '';
+  const isLogical = datasetSpec?.kind === 'logical';
+  const opt     = pyOptimizer(optimizerType, learningRate);
   const paramCount = layerSizes.slice(0, -1).reduce(
     (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
   );
@@ -464,24 +313,26 @@ function generateNotebook(layerSizes, hiddenActivationTypes, learningRate) {
       language_info: { name: 'python', version: '3.9.0' },
     },
     cells: [
-      md(`# XOR Neural Network — Neural Net Playground Export
+      md(`# ${name} Neural Network — Neural Net Playground Export
 
 This notebook was exported from **Neural Net Playground** — an interactive MLP
-simulator that trains on XOR using real backpropagation (no ML libraries).
+simulator that trains on the **${name}** dataset using real backpropagation
+(no ML libraries).
 
 ## Configuration
 
 | Property | Value |
 |----------|-------|
+| Dataset | ${name} (${dataset.length} points) |
 | Architecture | ${archStr} |
 | Hidden activations | ${actStr} |
 | Output activation | Sigmoid |
 | Loss function | Binary Cross-Entropy (BCELoss) |
-| Optimizer | SGD, lr = ${learningRate} |
+| Optimizer | ${opt.label}, lr = ${learningRate} |
 | Total parameters | ${paramCount} |
 
 > **Note:** Weights are randomly re-initialized here, not copied from the simulator.
-> Re-run cells until convergence — this architecture reliably solves XOR.`),
+> The dataset points are exactly the ones shown in the playground.`),
 
       code(`import torch
 import torch.nn as nn
@@ -490,20 +341,19 @@ import matplotlib.pyplot as plt
 torch.manual_seed(42)  # remove for random init each run
 print("PyTorch:", torch.__version__)`),
 
-      md(`## 1 · XOR Dataset
+      md(`## 1 · ${name} Dataset
 
-XOR outputs **1** iff exactly one input is 1. It is *not linearly separable* —
-a single-layer perceptron cannot solve it, but a two-layer MLP can.
+${desc}${isLogical ? `
 
 | x₁ | x₂ | y |
 |:--:|:--:|:-:|
-| 0  | 0  | 0 |
-| 0  | 1  | 1 |
-| 1  | 0  | 1 |
-| 1  | 1  | 0 |`),
+${dataset.map(d => `| ${d.input[0]}  | ${d.input[1]}  | ${d.label} |`).join('\n')}` : `
 
-      code(`X = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=torch.float)
-y = torch.tensor([[0],    [1],    [1],    [0]],     dtype=torch.float)
+The ${dataset.length} points below live in [0, 1]² — exactly the data shown on
+the decision-boundary canvas.`}`),
+
+      code(`X = torch.tensor(${pts.X}, dtype=torch.float)
+y = torch.tensor(${pts.y}, dtype=torch.float)
 print("X:", X.shape, " y:", y.shape)`),
 
       md(`## 2 · Model Definition
@@ -525,19 +375,20 @@ print(model)`),
 
 $$L = -\\frac{1}{N} \\sum_{i=1}^{N} \\bigl[ y_i \\log(\\hat{y}_i) + (1-y_i)\\log(1-\\hat{y}_i) \\bigr]$$
 
-**SGD** updates weights via gradient descent:
+The optimizer (**${opt.label}**) updates weights from the gradient; the base
+gradient-descent step is:
 
 $$W \\leftarrow W - \\eta \\cdot \\frac{\\partial L}{\\partial W}, \\quad \\eta = ${learningRate}$$`),
 
       code(`criterion = nn.BCELoss()
-optimizer  = torch.optim.SGD(model.parameters(), lr=${learningRate})
+optimizer  = ${opt.ctor}  # ${opt.label}
 print(criterion)
 print(optimizer)`),
 
       md(`## 4 · Training Loop
 
-Each epoch is a full pass over all 4 XOR samples. The five lines map directly
-to the **Explained Step** mode in the simulator:
+Each epoch is a full pass over all ${dataset.length} samples. The five lines map
+directly to the **Explained Step** mode in the simulator:
 
 | Step | Code | Simulator stage |
 |------|------|-----------------|
@@ -551,7 +402,7 @@ to the **Explained Step** mode in the simulator:
 for epoch in range(10_000):
     optimizer.zero_grad()        # clear accumulated gradients
     out  = model(X)              # forward pass: activations left -> right
-    loss = criterion(out, y)     # BCE loss over all 4 samples
+    loss = criterion(out, y)     # BCE loss over all samples
     loss.backward()              # backprop: dL/dW via chain rule
     optimizer.step()             # W <- W - lr * dL/dW
     losses.append(loss.item())
@@ -570,10 +421,10 @@ to **Tanh** activations, or using **Adam** (lr=0.01).`),
       code(`fig, ax = plt.subplots(figsize=(8, 3))
 ax.plot(losses, lw=1, color="#60a5fa", label="BCE Loss")
 ax.axhline(0.001, color="#10b981", ls="--", lw=1, label="convergence (0.001)")
-ax.set_xlabel("Epoch"); ax.set_ylabel("BCE Loss"); ax.set_title("XOR Training Loss")
+ax.set_xlabel("Epoch"); ax.set_ylabel("BCE Loss"); ax.set_title("${name} Training Loss")
 ax.legend(); plt.tight_layout(); plt.show()`),
 
-      md(`## 6 · XOR Verification
+      md(`## 6 · Verification
 
 Inference best practice:
 - \`model.eval()\` — disables dropout / batch-norm (none here, good habit)
@@ -701,142 +552,6 @@ function computeLayout(layerSizes, svgWidth, svgHeight) {
 }
 
 // =============================================================================
-// SECTION 13 — XOR EVALUATION
-// =============================================================================
-function evaluateXOR(weights, biases, hiddenActivationTypes) {
-  const L = weights.length;
-  return XOR_DATA.map(({ input, label }) => {
-    const { activations, preActivations } = forwardPass(
-      input, weights, biases, hiddenActivationTypes
-    );
-    const rawOutput      = activations[L][0];
-    const predictedClass = rawOutput > 0.5 ? 1 : 0;
-    const confidence     = Math.abs(rawOutput - 0.5) * 2;
-    const correct        = predictedClass === label;
-    const eps            = 1e-12;
-    const p              = Math.max(eps, Math.min(1 - eps, rawOutput));
-    const sampleLoss     = -(label * Math.log(p) + (1 - label) * Math.log(1 - p));
-    return { input, label, rawOutput, predictedClass, confidence, correct, sampleLoss,
-             activations, preActivations };
-  });
-}
-
-// =============================================================================
-// SECTION 14 — CONVERGENCE / STOP CONDITIONS
-// =============================================================================
-const CONVERGENCE_LOSS_THRESHOLD      = 0.001;
-const CONVERGENCE_CONSECUTIVE_EPOCHS  = 50;
-const CONVERGENCE_CONFIDENCE          = 0.95;
-const PLATEAU_PATIENCE                = 100;
-const MIN_IMPROVEMENT                 = 0.0005;
-const PLATEAU_MIN_LOSS                = 0.05;
-
-function checkConvergence(loss, xorResults, consecutiveCorrect) {
-  if (loss < CONVERGENCE_LOSS_THRESHOLD) {
-    return { converged: true, reason: `Loss dropped below ${CONVERGENCE_LOSS_THRESHOLD} (current: ${loss.toFixed(6)})` };
-  }
-  const allHighConf = xorResults.every(r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE);
-  if (allHighConf && consecutiveCorrect >= CONVERGENCE_CONSECUTIVE_EPOCHS) {
-    return { converged: true, reason: `All 4 XOR points correctly classified with >${(CONVERGENCE_CONFIDENCE*100).toFixed(0)}% confidence for ${CONVERGENCE_CONSECUTIVE_EPOCHS} consecutive epochs` };
-  }
-  return { converged: false, reason: '' };
-}
-
-// =============================================================================
-// SECTION 15 — CALCULUS PANEL UTILITIES
-// =============================================================================
-
-// Activation curve + derivative + tangent for Recharts.
-// Returns numPoints objects: { z, a, dAdZ, tangent }
-// tangent is only defined within ±1.5 of currentZ (null elsewhere → gap in chart).
-function computeActivationCurve(activType, zMin = -4, zMax = 4, numPoints = 80, currentZ = null) {
-  const fn    = ACTIVATIONS[activType].fn;
-  const deriv = ACTIVATIONS[activType].derivative;
-  return Array.from({ length: numPoints }, (_, i) => {
-    const z       = zMin + (i / (numPoints - 1)) * (zMax - zMin);
-    const tangent = (currentZ !== null && Math.abs(z - currentZ) <= 1.5)
-      ? fn(currentZ) + deriv(currentZ) * (z - currentZ)
-      : null;
-    return { z, a: fn(z), dAdZ: deriv(z), tangent };
-  });
-}
-
-// =============================================================================
-// SECTION 16 — GRADIENT CHECK  (finite-difference verification)
-//
-// Verifies that the backprop gradient ∂L/∂w for a single weight matches the
-// numerical estimate computed via the symmetric (centered) finite-difference:
-//
-//   ∂L/∂w ≈ [L(w + ε) − L(w − ε)] / (2ε)      O(ε²) truncation error
-//
-// This is the standard numerical gradient check used to validate autograd
-// implementations. If the analytical and numerical gradients agree to within
-// ~1e-4 relative error, the backprop computation is almost certainly correct.
-//
-// ε = 1e-4 balances two opposing concerns:
-//   • Too large → the linear approximation breaks down (quadratic error term)
-//   • Too small → catastrophic cancellation in float64 (significant bits lost
-//     when subtracting nearly-equal L+ and L−)
-// For float64 with double-precision loss values, ε = 1e-4 to 1e-5 is the
-// standard sweet spot.
-//
-// Gradients are averaged over all 4 XOR samples (full-batch), matching the
-// convention used by trainOneEpoch and startExplainedEpoch.
-//
-// PyTorch equivalent: torch.autograd.gradcheck(model, inputs, eps=1e-4)
-// =============================================================================
-function runGradientCheck(weights, biases, hiddenActivationTypes, l, j, k, epsilon = 1e-4) {
-  const N = XOR_DATA.length;
-  const L = weights.length;
-
-  // ① Analytical gradient — backprop averaged over all 4 XOR samples.
-  //    This is the exact same computation used during training; we're just
-  //    isolating one scalar entry dWeights[l][j][k].
-  let totalDW = 0;
-  for (const { input, label } of XOR_DATA) {
-    const { activations, preActivations } = forwardPass(
-      input, weights, biases, hiddenActivationTypes
-    );
-    const { dWeights } = backprop(
-      [label], activations, preActivations, weights, hiddenActivationTypes
-    );
-    totalDW += dWeights[l][j][k];
-  }
-  const backpropGrad = totalDW / N;
-
-  // ② Numerical gradient — perturb only W[l][j][k] by ±ε, recompute full loss.
-  const perturbed = (sign) =>
-    weights.map((W, li) =>
-      W.map((row, ji) =>
-        row.map((w, ki) => (li === l && ji === j && ki === k) ? w + sign * epsilon : w)
-      )
-    );
-
-  const evalLoss = (perturbedWeights) => {
-    const preds = XOR_DATA.map(({ input }) => {
-      const { activations } = forwardPass(input, perturbedWeights, biases, hiddenActivationTypes);
-      return activations[L];
-    });
-    return computeLoss(preds, XOR_DATA.map(d => d.label));
-  };
-
-  const lossPlus  = evalLoss(perturbed(+1));
-  const lossMinus = evalLoss(perturbed(-1));
-  const fdGrad    = (lossPlus - lossMinus) / (2 * epsilon);
-
-  const absError = Math.abs(backpropGrad - fdGrad);
-  // Relative error normalised by the sum of magnitudes (avoids div-by-zero
-  // when both gradients are essentially zero — which is correct agreement).
-  const relError = absError / Math.max(Math.abs(backpropGrad) + Math.abs(fdGrad), 1e-10);
-
-  return {
-    backpropGrad, fdGrad, absError, relError,
-    lossPlus, lossMinus, epsilon,
-    currentWeight: weights[l][j][k],
-  };
-}
-
-// =============================================================================
 // COMPONENT: NetworkGraph
 //
 // Props:
@@ -896,9 +611,14 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
             const isActive = animatingLayer >= 0 &&
               (li === animatingLayer - 1 || li === animatingLayer);
 
-            if (backpropData?.dWeights[li]) {
+            // Guard the full index path: right after an architecture change the
+            // new (larger) layout can transiently render against stale, smaller
+            // gradient data before initializeNetwork() clears it. Optional-chain
+            // so a shape mismatch falls back to a plain edge instead of throwing.
+            const gradEntry = backpropData?.dWeights?.[li]?.[ti]?.[fi];
+            if (gradEntry !== undefined) {
               // Color edges by gradient magnitude
-              const m = Math.abs(backpropData.dWeights[li][ti][fi]);
+              const m = Math.abs(gradEntry);
               stroke = gradientColor(m, maxGradMag);
               sw = 1 + 2 * (m / (maxGradMag || 1));
               // During backward animation: violet highlight for the active layer
@@ -1000,7 +720,7 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
     {backpropData && (
       <div className="flex items-center gap-1.5 px-1 pt-1 font-mono text-slate-500 flex-wrap"
            style={{ fontSize: '7.5px' }}>
-        <span>Edge color = |∂L/∂w| (absolute magnitude · avg over 4 XOR samples)</span>
+        <span>Edge color = |∂L/∂w| (absolute magnitude · avg over all training samples)</span>
         <div className="flex shrink-0">
           {[0, .17, .33, .5, .67, .83, 1].map((t, i) => (
             <div key={i} style={{ width: 14, height: 8, backgroundColor: gradientColor(t, 1) }} />
@@ -1027,12 +747,13 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
 //   Confidence mode: dark=near decision boundary (uncertain), amber=confident
 //   Both use ACTUAL forward passes — nothing is approximated.
 // =============================================================================
-function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes,
+function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes, dataset,
                                    inferencePoint, onClick, showConfidence }) {
   const canvasRef = useRef(null);
   const GRID      = 40;
   const CANVAS_SZ = 260;
   const POINT_R   = 7;
+  const points    = dataset || XOR_DATA;
 
   useEffect(() => {
     if (!weights || !canvasRef.current) return;
@@ -1053,16 +774,26 @@ function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes,
     }
 
     ctx.globalAlpha = 1;
-    for (const { input, label } of XOR_DATA) {
+    // Few points (logical gates): large, labelled, ringed dots. Many points
+    // (generated datasets): small unlabelled dots so the boundary stays visible.
+    const dense = points.length > 8;
+    const r     = dense ? 2.5 : POINT_R;
+    for (const { input, label } of points) {
       const cx = input[0] * CANVAS_SZ;
       const cy = (1 - input[1]) * CANVAS_SZ;
-      ctx.beginPath(); ctx.arc(cx, cy, POINT_R+2, 0, Math.PI*2);
-      ctx.strokeStyle = 'white'; ctx.lineWidth = 1.5; ctx.stroke();
-      ctx.beginPath(); ctx.arc(cx, cy, POINT_R, 0, Math.PI*2);
+      if (!dense) {
+        ctx.beginPath(); ctx.arc(cx, cy, r+2, 0, Math.PI*2);
+        ctx.strokeStyle = 'white'; ctx.lineWidth = 1.5; ctx.stroke();
+      }
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2);
       ctx.fillStyle = label === 1 ? '#f97316' : '#3b82f6'; ctx.fill();
-      ctx.fillStyle = 'white'; ctx.font = 'bold 9px monospace';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(label.toString(), cx, cy);
+      if (dense) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 0.5; ctx.stroke();
+      } else {
+        ctx.fillStyle = 'white'; ctx.font = 'bold 9px monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(label.toString(), cx, cy);
+      }
     }
 
     if (inferencePoint) {
@@ -1080,7 +811,7 @@ function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes,
     ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
     ctx.fillText('x₁: 0 → 1', CANVAS_SZ/2, CANVAS_SZ-3);
-  }, [weights, biases, hiddenActivationTypes, inferencePoint, showConfidence]);
+  }, [weights, biases, hiddenActivationTypes, inferencePoint, showConfidence, points]);
 
   return (
     <div className="relative">
@@ -1096,16 +827,24 @@ function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes,
 // =============================================================================
 // COMPONENT: XorVerifyPanel
 // =============================================================================
-function XorVerifyPanel({ xorResults }) {
+function XorVerifyPanel({ xorResults, datasetSpec }) {
+  const name = datasetSpec?.label || 'XOR';
   if (!xorResults) return (
-    <div className="text-xs text-slate-600 italic px-1">Train to see XOR verification</div>
+    <div className="text-xs text-slate-600 italic px-1">Train to see {name} verification</div>
   );
-  const allCorrect  = xorResults.every(r => r.correct);
+  const total       = xorResults.length;
+  const correctN    = xorResults.filter(r => r.correct).length;
+  const allCorrect  = correctN === total;
   const allHighConf = xorResults.every(r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE);
+  const accuracy    = total ? correctN / total : 0;
+  const meanConf    = total ? xorResults.reduce((s, r) => s + r.confidence, 0) / total : 0;
+  // Large generated datasets: show an accuracy/confidence summary plus a
+  // scrollable per-point table rather than an unreadable wall of rows.
+  const dense = total > 8;
   return (
     <div>
       <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">XOR Verify</span>
+        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">{name} Verify</span>
         {allCorrect && (
           <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${allHighConf ? 'bg-emerald-900/60 text-emerald-400' : 'bg-blue-900/60 text-blue-400'}`}>
             {allHighConf ? '✓ Solved' : '✓ Correct'}
@@ -1113,36 +852,52 @@ function XorVerifyPanel({ xorResults }) {
         )}
         {!allCorrect && (
           <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/40 text-red-400">
-            {xorResults.filter(r => r.correct).length}/4 correct
+            {correctN}/{total} correct
           </span>
         )}
       </div>
-      <table className="w-full text-xs font-mono border-collapse">
-        <thead>
-          <tr className="text-slate-600">
-            <th className="text-left pb-1">Input</th>
-            <th className="text-center pb-1">Exp</th>
-            <th className="text-right pb-1">p(1)</th>
-            <th className="text-center pb-1">→</th>
-            <th className="text-right pb-1">Conf</th>
-            <th className="text-center pb-1 w-4">✓</th>
-          </tr>
-        </thead>
-        <tbody>
-          {xorResults.map((r, i) => (
-            <tr key={i} className={`border-t border-slate-800 ${r.correct ? 'text-slate-300' : 'text-red-400'}`}>
-              <td className="py-0.5 pr-1">[{r.input.join(',')}]</td>
-              <td className="text-center">{r.label}</td>
-              <td className="text-right">{r.rawOutput.toFixed(3)}</td>
-              <td className="text-center text-slate-500">→</td>
-              <td className={`text-right ${r.confidence > CONVERGENCE_CONFIDENCE ? 'text-emerald-400' : r.confidence > 0.7 ? 'text-amber-400' : 'text-red-400'}`}>
-                {(r.confidence * 100).toFixed(0)}%
-              </td>
-              <td className="text-center">{r.correct ? '✓' : '✗'}</td>
+      {dense && (
+        <div className="flex gap-2 mb-2 text-xs">
+          <div className="flex-1 bg-slate-800/60 rounded px-2 py-1">
+            <div className="text-slate-500">Accuracy</div>
+            <div className={`font-mono font-bold ${accuracy === 1 ? 'text-emerald-400' : accuracy > 0.9 ? 'text-amber-400' : 'text-red-400'}`}>
+              {(accuracy * 100).toFixed(1)}% <span className="text-slate-600 font-normal">({correctN}/{total})</span>
+            </div>
+          </div>
+          <div className="flex-1 bg-slate-800/60 rounded px-2 py-1">
+            <div className="text-slate-500">Mean conf</div>
+            <div className="font-mono font-bold text-slate-300">{(meanConf * 100).toFixed(0)}%</div>
+          </div>
+        </div>
+      )}
+      <div className={dense ? 'max-h-40 overflow-y-auto' : ''}>
+        <table className="w-full text-xs font-mono border-collapse">
+          <thead>
+            <tr className="text-slate-600">
+              <th className="text-left pb-1">Input</th>
+              <th className="text-center pb-1">Exp</th>
+              <th className="text-right pb-1">p(1)</th>
+              <th className="text-center pb-1">→</th>
+              <th className="text-right pb-1">Conf</th>
+              <th className="text-center pb-1 w-4">✓</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {xorResults.map((r, i) => (
+              <tr key={i} className={`border-t border-slate-800 ${r.correct ? 'text-slate-300' : 'text-red-400'}`}>
+                <td className="py-0.5 pr-1">[{r.input.map(v => Number.isInteger(v) ? v : v.toFixed(2)).join(',')}]</td>
+                <td className="text-center">{r.label}</td>
+                <td className="text-right">{r.rawOutput.toFixed(3)}</td>
+                <td className="text-center text-slate-500">→</td>
+                <td className={`text-right ${r.confidence > CONVERGENCE_CONFIDENCE ? 'text-emerald-400' : r.confidence > 0.7 ? 'text-amber-400' : 'text-red-400'}`}>
+                  {(r.confidence * 100).toFixed(0)}%
+                </td>
+                <td className="text-center">{r.correct ? '✓' : '✗'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -1150,35 +905,49 @@ function XorVerifyPanel({ xorResults }) {
 // =============================================================================
 // COMPONENT: MathAuditPanel
 // =============================================================================
-function MathAuditPanel({ xorResults, hiddenActivationTypes, layerSizes }) {
+function MathAuditPanel({ xorResults, hiddenActivationTypes, layerSizes, dataset }) {
   const [selectedIdx, setSelectedIdx] = useState(0);
   if (!xorResults) return (
     <div className="text-xs text-slate-600 italic">Train to see forward-pass audit</div>
   );
 
-  const r = xorResults[selectedIdx];
+  const points = dataset || XOR_DATA;
+  const fmt    = inp => inp.map(v => Number.isInteger(v) ? v : v.toFixed(2)).join(',');
+  // selectedIdx can be stale after a dataset switch; clamp into range.
+  const idx = Math.min(selectedIdx, xorResults.length - 1);
+  const r = xorResults[idx];
   const { activations, preActivations, input, label, rawOutput, sampleLoss } = r;
+  const dense = points.length > 8;
 
   return (
     <div>
       <div className="flex items-center gap-2 mb-2">
         <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Math Audit</span>
-        <div className="flex gap-1">
-          {XOR_DATA.map((d, i) => (
-            <button key={i} onClick={() => setSelectedIdx(i)}
-              className={`text-xs px-1.5 py-0.5 rounded font-mono transition-colors ${
-                i === selectedIdx ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-              }`}>
-              [{d.input.join(',')}]
-            </button>
-          ))}
-        </div>
+        {dense ? (
+          <select value={idx} onChange={e => setSelectedIdx(+e.target.value)}
+            className="text-xs bg-slate-800 text-slate-300 rounded px-1.5 py-0.5 font-mono border border-slate-700">
+            {points.map((d, i) => (
+              <option key={i} value={i}>#{i} [{fmt(d.input)}] y={d.label}</option>
+            ))}
+          </select>
+        ) : (
+          <div className="flex gap-1">
+            {points.map((d, i) => (
+              <button key={i} onClick={() => setSelectedIdx(i)}
+                className={`text-xs px-1.5 py-0.5 rounded font-mono transition-colors ${
+                  i === idx ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                }`}>
+                [{fmt(d.input)}]
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="text-xs font-mono space-y-1.5 bg-slate-900/60 rounded p-2">
         <div className="text-slate-400">
           <span className="text-slate-500">Input  </span>
-          x = [{input.join(', ')}]
+          x = [{input.map(v => Number.isInteger(v) ? v : v.toFixed(3)).join(', ')}]
           <span className="text-slate-600 ml-1">(label={label})</span>
         </div>
 
@@ -1220,7 +989,7 @@ function MathAuditPanel({ xorResults, hiddenActivationTypes, layerSizes }) {
 // Shows both values side by side with the absolute and relative error so the
 // user can see for themselves that the math is correct.
 // =============================================================================
-function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGradients }) {
+function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGradients, dataset }) {
   const [layerIdx, setLayerIdx] = useState(0);
   const [rowIdx,   setRowIdx]   = useState(0);
   const [colIdx,   setColIdx]   = useState(0);
@@ -1268,7 +1037,7 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGr
   const handleRun = () => {
     const r = runGradientCheck(
       network.weights, network.biases, hiddenActivationTypes,
-      layerIdx, safeRow, safeCol
+      layerIdx, safeRow, safeCol, 1e-4, dataset
     );
     setResult(r);
   };
@@ -1342,7 +1111,7 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGr
         <div className="text-xs font-mono bg-slate-900/60 rounded p-2 space-y-1">
           {/* Intermediate loss values so the user can see the raw computation */}
           <div className="text-slate-500 border-b border-slate-800 pb-1 mb-1">
-            ε = {result.epsilon}  ·  full-batch (N = 4 XOR samples)
+            ε = {result.epsilon}  ·  full-batch (N = {(dataset || XOR_DATA).length} samples)
           </div>
           <div className="flex justify-between">
             <span className="text-slate-500">Loss(w + ε)</span>
@@ -1391,6 +1160,166 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGr
 }
 
 // =============================================================================
+// COMPONENT: LossSurfacePanel
+//
+// A 2-D slice of the loss landscape over two chosen weights (every other
+// parameter held fixed), drawn as a real-loss heatmap. Overlays the live
+// position of those weights and, optionally, the trajectory they trace during
+// a real optimization run. See src/nn/surface.js for the math and caveats.
+// =============================================================================
+const SURF_SZ   = 236;
+const SURF_GRID = 31;
+
+// Loss heatmap colour: best (min) = emerald, worst (max) = deep slate.
+function surfaceColor(loss, min, max) {
+  const t = max > min ? (loss - min) / (max - min) : 0;
+  const lo = [16, 185, 129], hi = [15, 23, 42];
+  const c = i => Math.round(lo[i] * (1 - t) + hi[i] * t);
+  return `rgb(${c(0)},${c(1)},${c(2)})`;
+}
+
+function LossSurfacePanel({ network, hiddenActivationTypes, dataset, lastGradients, learningRate, optimizerType }) {
+  const canvasRef = useRef(null);
+  const [span, setSpan]       = useState(3);
+  const [showPath, setShowPath] = useState(false);
+  const [surface, setSurface] = useState(null);
+  const [path, setPath]       = useState(null);
+
+  // Flat list of every weight coordinate for the axis dropdowns.
+  const coords = [];
+  network?.weights.forEach((M, l) => M.forEach((row, j) => row.forEach((_, k) => coords.push([l, j, k]))));
+  const keyOf = c => c.join('-');
+  const labelOf = c => `W${c[0]}[${c[1]}][${c[2]}]`;
+
+  // Default axes: the two largest-gradient weights if known, else the first two.
+  const defaults = () => {
+    if (lastGradients) {
+      const ranked = [];
+      lastGradients.dWeights.forEach((M, l) => M.forEach((row, j) => row.forEach((v, k) =>
+        ranked.push({ c: [l, j, k], m: Math.abs(v) }))));
+      ranked.sort((a, b) => b.m - a.m);
+      if (ranked.length >= 2) return [ranked[0].c, ranked[1].c];
+    }
+    return [coords[0] || [0, 0, 0], coords[1] || coords[0] || [0, 0, 1]];
+  };
+  const [coordA, setCoordA] = useState(() => defaults()[0]);
+  const [coordB, setCoordB] = useState(() => defaults()[1]);
+
+  // Recompute the surface when the axes or span change (snapshot of the current
+  // network — other weights are held at their present values).
+  const optsKey = keyOf(coordA) + '|' + keyOf(coordB) + '|' + span;
+  useEffect(() => {
+    if (!network) return;
+    setSurface(computeLossSurface(network, hiddenActivationTypes, dataset, coordA, coordB, { span, gridSize: SURF_GRID }));
+    setPath(null);
+    setShowPath(false);
+    // network read fresh at compute time; recompute is user-driven via axes/span
+    // and re-runs when the dataset changes. Not keyed on per-epoch network churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optsKey, dataset]);
+
+  const handleRunDescent = () => {
+    if (!network) return;
+    const p = computeDescentPath(network, hiddenActivationTypes, dataset, coordA, coordB, learningRate, 200, optimizerType);
+    setPath(p);
+    setShowPath(true);
+  };
+
+  // Draw heatmap + trajectory + live marker.
+  useEffect(() => {
+    if (!surface || !canvasRef.current) return;
+    const ctx = canvasRef.current.getContext('2d');
+    const cell = SURF_SZ / SURF_GRID;
+    const a0 = surface.aVals[0], a1 = surface.aVals.at(-1);
+    const b0 = surface.bVals[0], b1 = surface.bVals.at(-1);
+    const toPx = (a, b) => ({
+      x: ((a - a0) / (a1 - a0)) * SURF_SZ,
+      y: (1 - (b - b0) / (b1 - b0)) * SURF_SZ, // b axis points up
+    });
+
+    ctx.clearRect(0, 0, SURF_SZ, SURF_SZ);
+    for (let bi = 0; bi < SURF_GRID; bi++) {
+      for (let ai = 0; ai < SURF_GRID; ai++) {
+        ctx.fillStyle = surfaceColor(surface.grid[bi][ai], surface.min, surface.max);
+        ctx.fillRect(ai * cell, (SURF_GRID - 1 - bi) * cell, cell + 1, cell + 1);
+      }
+    }
+
+    // Trajectory polyline (clamped points still drawn; off-grid points clip).
+    if (showPath && path && path.length > 1) {
+      ctx.beginPath();
+      path.forEach((pt, i) => {
+        const { x, y } = toPx(pt.a, pt.b);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 1.5; ctx.stroke();
+      const end = toPx(path.at(-1).a, path.at(-1).b);
+      ctx.fillStyle = '#fbbf24';
+      ctx.beginPath(); ctx.arc(end.x, end.y, 3, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Live marker = current values of the two weights (moves as you train).
+    const cur = toPx(network.weights[coordA[0]][coordA[1]][coordA[2]],
+                     network.weights[coordB[0]][coordB[1]][coordB[2]]);
+    ctx.beginPath(); ctx.arc(cur.x, cur.y, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#f472b6'; ctx.fill();
+    ctx.strokeStyle = 'white'; ctx.lineWidth = 1.5; ctx.stroke();
+  }, [surface, path, showPath, network, coordA, coordB]);
+
+  if (!network) return (
+    <div className="text-xs text-slate-600 italic">Initialize the network first.</div>
+  );
+
+  const sel = (value, onChange) => (
+    <select value={value} onChange={e => onChange(e.target.value.split('-').map(Number))}
+      className="bg-slate-800 border border-slate-600 rounded text-white px-1 py-0.5" style={{ fontSize: '10px' }}>
+      {coords.map(c => <option key={keyOf(c)} value={keyOf(c)}>{labelOf(c)}</option>)}
+    </select>
+  );
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Loss Surface</span>
+      </div>
+      <p className="text-slate-500" style={{ fontSize: '10px', lineHeight: 1.3 }}>
+        Real BCE loss over two weights; all others fixed. A 2-D slice of a high-dimensional surface.
+      </p>
+
+      <div className="flex items-center gap-1.5 flex-wrap" style={{ fontSize: '10px' }}>
+        <span className="text-pink-300">x:</span> {sel(keyOf(coordA), setCoordA)}
+        <span className="text-pink-300 ml-1">y:</span> {sel(keyOf(coordB), setCoordB)}
+      </div>
+
+      <canvas ref={canvasRef} width={SURF_SZ} height={SURF_SZ}
+        className="rounded border border-slate-700 block mx-auto" />
+
+      <label className="block">
+        <span className="text-slate-500" style={{ fontSize: '10px' }}>Zoom (±{span.toFixed(1)} around current)</span>
+        <input type="range" min="0.5" max="6" step="0.5" value={span}
+          onChange={e => setSpan(parseFloat(e.target.value))} className="w-full accent-emerald-500" />
+      </label>
+
+      <button onClick={handleRunDescent}
+        className="w-full py-1 rounded text-xs bg-slate-800 hover:bg-amber-900/40 text-amber-300/90 border border-slate-700">
+        ↘ Trace descent path (200 epochs)
+      </button>
+
+      <div className="flex items-center gap-3" style={{ fontSize: '10px' }}>
+        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-pink-400 border border-white" />current</span>
+        {path && <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" />path</span>}
+        <span className="text-slate-600">emerald = lower loss</span>
+      </div>
+      {path && (
+        <p className="text-slate-600" style={{ fontSize: '9px', lineHeight: 1.3 }}>
+          The path is the real optimizer trajectory projected onto these two axes — all other weights move too, so it can drift off this static slice's valley.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
 // COMPONENT: ChainRuleTracer
 //
 // For a selected weight W[l][j][k], shows the full chain-rule derivation using
@@ -1404,7 +1333,7 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGr
 // The trace below shows per-sample values for the selected input, with a
 // comparison to the batch-average gradient that actually drives training.
 // =============================================================================
-function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradients }) {
+function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, dataset, lastGradients }) {
   const [selLayer,  setSelLayer]  = useState(0);
   const [selOutN,   setSelOutN]   = useState(0);
   const [selInN,    setSelInN]    = useState(0);
@@ -1418,14 +1347,16 @@ function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradi
     );
   }
 
+  const points  = dataset || XOR_DATA;
   const L       = network.weights.length;
   const safeL   = Math.min(selLayer, L - 1);
   const safeJ   = Math.min(selOutN, layerSizes[safeL + 1] - 1);
   const safeK   = Math.min(selInN,  layerSizes[safeL]     - 1);
 
-  // Re-run forward + backprop on the selected XOR sample to get per-sample deltas.
+  // Re-run forward + backprop on the selected sample to get per-sample deltas.
   // backprop() returns deltas[] where deltas[l+1][j] = ∂L/∂z_j for layer l+1.
-  const sample = XOR_DATA[selSample];
+  const safeSample = Math.min(selSample, points.length - 1);
+  const sample = points[safeSample];
   const { activations, preActivations } = forwardPass(
     sample.input, network.weights, network.biases, hiddenActivationTypes
   );
@@ -1500,13 +1431,21 @@ function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradi
           ))}
         </div>
 
-        {/* XOR sample picker */}
+        {/* Input sample picker — buttons for small datasets, dropdown for large */}
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-slate-600" style={{ fontSize: '8px' }}>Input sample:</span>
-          {XOR_DATA.map((s, i) => (
+          {points.length > 8 ? (
+            <select value={safeSample} onChange={e => setSelSample(+e.target.value)}
+              className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-slate-200 font-mono"
+              style={{ fontSize: '9px' }}>
+              {points.map((s, i) => (
+                <option key={i} value={i}>#{i} [{s.input.map(v => Number.isInteger(v) ? v : v.toFixed(2)).join(',')}]→{s.label}</option>
+              ))}
+            </select>
+          ) : points.map((s, i) => (
             <button key={i} onClick={() => setSelSample(i)}
               className={`px-1.5 py-0.5 rounded font-mono border transition-colors ${
-                selSample === i
+                safeSample === i
                   ? 'bg-blue-900/50 text-blue-300 border-blue-700'
                   : 'bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300'
               }`} style={{ fontSize: '9px' }}>
@@ -1661,7 +1600,7 @@ function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradi
 // Shows: f(z) curve, f′(z) derivative curve, tangent line at current z,
 // vertical marker at current z, and numeric readout.
 // =============================================================================
-function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastForwardData }) {
+function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, dataset, lastForwardData }) {
   const [selLayer,  setSelLayer]  = useState(1);
   const [selNeuron, setSelNeuron] = useState(0);
   const [selSample, setSelSample] = useState(0);
@@ -1675,6 +1614,7 @@ function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastFo
     );
   }
 
+  const points    = dataset || XOR_DATA;
   const numLayers = layerSizes.length;   // includes input layer
   const safeLayer = Math.max(1, Math.min(selLayer, numLayers - 1));
   const safeN     = Math.min(selNeuron, layerSizes[safeLayer] - 1);
@@ -1684,7 +1624,8 @@ function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastFo
   const actLabel  = ACTIVATIONS[actType].label;
 
   // Compute actual z and activation values for the selected sample
-  const sample = XOR_DATA[selSample];
+  const safeSample = Math.min(selSample, points.length - 1);
+  const sample = points[safeSample];
   const { activations: sActs, preActivations: sPre } = forwardPass(
     sample.input, network.weights, network.biases, hiddenActivationTypes
   );
@@ -1729,10 +1670,18 @@ function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastFo
 
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-slate-600" style={{ fontSize: '8px' }}>Input:</span>
-          {XOR_DATA.map((s, i) => (
+          {points.length > 8 ? (
+            <select value={safeSample} onChange={e => setSelSample(+e.target.value)}
+              className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-slate-200 font-mono"
+              style={{ fontSize: '9px' }}>
+              {points.map((s, i) => (
+                <option key={i} value={i}>#{i} [{s.input.map(v => Number.isInteger(v) ? v : v.toFixed(2)).join(',')}]</option>
+              ))}
+            </select>
+          ) : points.map((s, i) => (
             <button key={i} onClick={() => setSelSample(i)}
               className={`px-1.5 py-0.5 rounded font-mono border transition-colors ${
-                selSample === i
+                safeSample === i
                   ? 'bg-blue-900/50 text-blue-300 border-blue-700'
                   : 'bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300'
               }`} style={{ fontSize: '9px' }}>
@@ -1896,7 +1845,7 @@ function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastFo
 // =============================================================================
 // COMPONENT: CalcPanel  (Phase 3 Calculus Panel)
 // =============================================================================
-function CalcPanel({ network, layerSizes, hiddenActivationTypes, lastGradients, lastForwardData }) {
+function CalcPanel({ network, layerSizes, hiddenActivationTypes, dataset, lastGradients, lastForwardData }) {
   const [section, setSection] = useState('chain');
 
   return (
@@ -1923,6 +1872,7 @@ function CalcPanel({ network, layerSizes, hiddenActivationTypes, lastGradients, 
           network={network}
           layerSizes={layerSizes}
           hiddenActivationTypes={hiddenActivationTypes}
+          dataset={dataset}
           lastGradients={lastGradients}
         />
       )}
@@ -1931,6 +1881,7 @@ function CalcPanel({ network, layerSizes, hiddenActivationTypes, lastGradients, 
           network={network}
           layerSizes={layerSizes}
           hiddenActivationTypes={hiddenActivationTypes}
+          dataset={dataset}
           lastForwardData={lastForwardData}
         />
       )}
@@ -2018,7 +1969,7 @@ function WeightsInspector({ network, layerSizes, hiddenActivationTypes, epoch, t
       convergenceReasons.includes('xor_verified')
     ) {
       trainingObj.note =
-        `Converged via XOR confidence criterion (all 4 points correct with >${(CONVERGENCE_CONFIDENCE*100).toFixed(0)}% confidence ` +
+        `Converged via confidence criterion (all ${(xorResults?.length ?? 4)} points correct with >${(CONVERGENCE_CONFIDENCE*100).toFixed(0)}% confidence ` +
         `for ${CONVERGENCE_CONSECUTIVE_EPOCHS} consecutive epochs). Loss ${latestLoss.toFixed(5)} is above the ` +
         `${CONVERGENCE_LOSS_THRESHOLD} threshold — that is expected for this convergence path.`;
     }
@@ -2351,8 +2302,8 @@ function ConceptCallout({ type, onDismiss, trainingStatus, hiddenActivationTypes
       pytorch: '# Adam adapts the learning rate per weight — more robust than SGD:\noptimizer = torch.optim.Adam(model.parameters(), lr=0.01)',
     },
     converged: {
-      title: 'XOR Solved ✓', color: 'border-emerald-500', icon: '✓',
-      body: 'The network correctly classifies all 4 XOR points with high confidence. Training stopped automatically. You can click anywhere on the boundary canvas to test inference.',
+      title: 'Solved ✓', color: 'border-emerald-500', icon: '✓',
+      body: 'The network correctly classifies all training points with high confidence. Training stopped automatically. You can click anywhere on the boundary canvas to test inference.',
       pytorch: `model.eval()\nwith torch.no_grad():\n    pred = model(test_input)`,
     },
     vanishingGradient: {
@@ -2398,7 +2349,7 @@ function ConceptCallout({ type, onDismiss, trainingStatus, hiddenActivationTypes
 // Weights are NOT exported — the generated code reinitializes randomly.
 // A note in the UI and the exported files makes this explicit.
 // =============================================================================
-function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate }) {
+function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, optimizerType, datasetId, dataset, datasetSpec }) {
   const [codeExpanded, setCodeExpanded] = useState(false);
   const [copyDone,     setCopyDone]     = useState(false);
 
@@ -2406,9 +2357,10 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate }) {
     (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
   );
   const actLabels = hiddenActivationTypes.map(t => ACTIVATIONS[t]?.label || t).join(', ');
+  const optLabel  = OPTIMIZERS[optimizerType]?.label || 'SGD';
 
   const handleCopyScript = () => {
-    const script = generateFullScript(layerSizes, hiddenActivationTypes, learningRate);
+    const script = generateFullScript(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec, optimizerType);
     const write = () => {
       if (navigator.clipboard?.writeText) {
         navigator.clipboard.writeText(script).catch(fallback);
@@ -2427,11 +2379,11 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate }) {
   };
 
   const handleExportNotebook = () => {
-    const nb   = generateNotebook(layerSizes, hiddenActivationTypes, learningRate);
+    const nb   = generateNotebook(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec, optimizerType);
     const blob = new Blob([JSON.stringify(nb, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
-    a.href = url; a.download = 'neural-viz-xor.ipynb'; a.click();
+    a.href = url; a.download = `neural-viz-${datasetId}.ipynb`; a.click();
     URL.revokeObjectURL(url);
   };
 
@@ -2458,7 +2410,7 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate }) {
         </div>
         <div>
           <span className="text-slate-600">opt   </span>
-          <span className="text-slate-300">SGD lr={learningRate.toFixed(3)}</span>
+          <span className="text-slate-300">{optLabel} lr={learningRate.toFixed(3)}</span>
           <span className="text-slate-600"> · </span>
           <span className="text-slate-300">BCELoss</span>
         </div>
@@ -2489,6 +2441,16 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate }) {
         </div>
       </div>
 
+      {/* The exported script/notebook trains on the active dataset's points.
+          Weights are still randomly re-initialized (noted in the files). */}
+      {datasetSpec?.kind === 'geometric' && (
+        <div className="mx-3 mb-2 px-2 py-1.5 rounded bg-slate-800/60 border border-slate-700 text-slate-400"
+          style={{ fontSize: '10px', lineHeight: 1.35 }}>
+          Export embeds the {dataset.length} <span className="font-mono">{datasetSpec.label}</span> points shown
+          on the canvas. Weights are re-initialized randomly — re-run until trained.
+        </div>
+      )}
+
       {/* Export buttons */}
       <div className="flex gap-1.5 px-3 pb-2.5">
         <button onClick={handleCopyScript}
@@ -2516,10 +2478,91 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate }) {
         <div className="bg-gray-950 border-t border-slate-800 overflow-y-auto"
              style={{ maxHeight: '220px' }}>
           <pre className="text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap p-3">
-            {generatePyTorchCode(layerSizes, hiddenActivationTypes)}
+            {generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec, optimizerType)}
           </pre>
         </div>
       )}
+    </div>
+  );
+}
+
+// =============================================================================
+// COMPONENT: LessonsPanel
+//
+// Non-modal guided-tour player. Shows a menu of lessons, then steps through one
+// — applying each step's setup is handled by the parent (see applyLessonSetup).
+// Stays out of the way so the user can still drive the real controls.
+// =============================================================================
+
+// Minimal **bold** renderer for lesson body text.
+function renderLessonBody(text) {
+  return text.split('**').map((part, i) =>
+    i % 2 === 1 ? <strong key={i} className="text-slate-100 font-semibold">{part}</strong> : part
+  );
+}
+
+function LessonsPanel({ lessonIdx, stepIdx, onPick, onPrev, onNext, onExitToMenu, onClose }) {
+  // Lesson menu
+  if (lessonIdx === null) {
+    return (
+      <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-40 w-[440px] max-w-[94vw] bg-slate-900/95 border border-indigo-700/60 rounded-lg shadow-2xl backdrop-blur p-3">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-bold text-white">📚 Guided lessons</span>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-lg leading-none">×</button>
+        </div>
+        <div className="space-y-1.5">
+          {LESSONS.map((lesson, i) => (
+            <button key={lesson.id} onClick={() => onPick(i)}
+              className="w-full text-left px-2.5 py-1.5 rounded bg-slate-800/70 hover:bg-slate-700 border border-slate-700 transition-colors">
+              <div className="text-xs font-semibold text-indigo-300">{lesson.title}</div>
+              <div className="text-slate-400" style={{ fontSize: '11px' }}>{lesson.summary}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const lesson = LESSONS[lessonIdx];
+  const step   = lesson.steps[stepIdx];
+  const last   = stepIdx === lesson.steps.length - 1;
+
+  return (
+    <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-40 w-[440px] max-w-[94vw] bg-slate-900/95 border border-indigo-700/60 rounded-lg shadow-2xl backdrop-blur p-3">
+      <div className="flex items-center justify-between mb-1">
+        <button onClick={onExitToMenu} className="text-indigo-300 hover:text-indigo-200" style={{ fontSize: '11px' }}>
+          ‹ {lesson.title}
+        </button>
+        <div className="flex items-center gap-2">
+          <span className="text-slate-500" style={{ fontSize: '10px' }}>Step {stepIdx + 1}/{lesson.steps.length}</span>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-lg leading-none">×</button>
+        </div>
+      </div>
+      <div className="text-sm font-bold text-white mb-1">{step.title}</div>
+      <p className="text-xs text-slate-300 leading-relaxed mb-3">{renderLessonBody(step.body)}</p>
+      <div className="flex items-center gap-2">
+        <button onClick={onPrev} disabled={stepIdx === 0}
+          className="px-2.5 py-1 rounded text-xs bg-slate-800 text-slate-300 border border-slate-700 disabled:opacity-40 hover:bg-slate-700">
+          ‹ Prev
+        </button>
+        {last ? (
+          <button onClick={onExitToMenu}
+            className="px-2.5 py-1 rounded text-xs bg-indigo-700 hover:bg-indigo-600 text-white border border-indigo-500">
+            Finish ✓
+          </button>
+        ) : (
+          <button onClick={onNext}
+            className="px-2.5 py-1 rounded text-xs bg-indigo-700 hover:bg-indigo-600 text-white border border-indigo-500">
+            Next ›
+          </button>
+        )}
+        <div className="flex-1" />
+        <div className="flex gap-1">
+          {lesson.steps.map((_, i) => (
+            <span key={i} className={`inline-block w-1.5 h-1.5 rounded-full ${i === stepIdx ? 'bg-indigo-400' : 'bg-slate-700'}`} />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2533,6 +2576,18 @@ export default function App() {
   const [neuronsPerLayer, setNeuronsPerLayer]  = useState([4, 4]);
   const [activationTypes, setActivationTypes]  = useState(['relu', 'relu']);
 
+  // ── Dataset ────────────────────────────────────────────────────────────────
+  // The selected dataset id plus generation options for the geometric sets.
+  // `dataset` is the concrete list of { input, label } points everything trains
+  // on, visualizes, and audits. Logical gates ignore points/noise/seed.
+  const [datasetId,   setDatasetId]   = useState('xor');
+  const [datasetOpts, setDatasetOpts] = useState(DEFAULT_DATASET_OPTS);
+  const datasetSpec = DATASETS[datasetId] || DATASETS.xor;
+  const dataset = useMemo(
+    () => makeDataset(datasetId, datasetOpts),
+    [datasetId, datasetOpts.points, datasetOpts.noise, datasetOpts.seed]
+  );
+
   // ── Network weights ────────────────────────────────────────────────────────
   const [network, setNetwork] = useState(null);
 
@@ -2543,6 +2598,7 @@ export default function App() {
   const [epoch,                  setEpoch]                  = useState(0);
   const [lossHistory,            setLossHistory]            = useState([]);
   const [learningRate,           setLearningRate]           = useState(0.1);
+  const [optimizerType,          setOptimizerType]          = useState('sgd');
   const [bestLoss,               setBestLoss]               = useState(Infinity);
   const [epochsSinceImprovement, setEpochsSinceImprovement] = useState(0);
   const [maxEpochs,              setMaxEpochs]              = useState(10000);
@@ -2576,6 +2632,14 @@ export default function App() {
   // ── Inference ─────────────────────────────────────────────────────────────
   const [inferencePoint, setInferencePoint] = useState(null);
 
+  // ── Optimizer comparison overlay ────────────────────────────────────────────
+  const [compareData, setCompareData] = useState(null); // { rows, epochs, lr } | null
+
+  // ── Guided lessons ──────────────────────────────────────────────────────────
+  const [lessonsOpen, setLessonsOpen] = useState(false);
+  const [lessonIdx,   setLessonIdx]   = useState(null); // null = lesson menu
+  const [lessonStep,  setLessonStep]  = useState(0);
+
   // ── Concept callouts ───────────────────────────────────────────────────────
   const [callouts,          setCallouts]         = useState(new Set());
   const [dismissedCallouts, setDismissedCallouts] = useState(new Set());
@@ -2594,9 +2658,29 @@ export default function App() {
   const isAnimatingRef        = useRef(false); // prevents concurrent animation runs
   const stepModeAutoTimerRef  = useRef(null);  // setTimeout ID for explained-step auto-play
   const stepModeAppliedRef    = useRef(false); // prevents double weight-apply on revisit of update stage
+  const optimizerRef          = useRef(null);  // live optimizer (owns momentum/Adam buffers)
+  const stepModeOptRef        = useRef(null);  // throwaway optimizer clone for the explained-step preview
 
+  const optimizerTypeRef = useRef('sgd');
+  const learningRateRef  = useRef(0.1);
   useEffect(() => { dismissedCalloutsRef.current = dismissedCallouts; }, [dismissedCallouts]);
   useEffect(() => { maxEpochsRef.current = maxEpochs; }, [maxEpochs]);
+  useEffect(() => { optimizerTypeRef.current = optimizerType; }, [optimizerType]);
+  useEffect(() => { learningRateRef.current = learningRate; }, [learningRate]);
+
+  // Optimizer lifecycle:
+  //  • learning-rate change → update lr in place (keep momentum/Adam buffers)
+  //  • optimizer-type change → rebuild from the current network (reset buffers)
+  useEffect(() => {
+    if (optimizerRef.current) optimizerRef.current.cfg.lr = learningRate;
+  }, [learningRate]);
+  useEffect(() => {
+    if (networkRef.current) {
+      optimizerRef.current = createOptimizer(optimizerType, learningRate, networkRef.current);
+    }
+    // lr is read fresh above; intentionally not a dependency here
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optimizerType]);
 
   const layerSizes = [2, ...neuronsPerLayer.slice(0, numHiddenLayers), 1];
 
@@ -2607,6 +2691,8 @@ export default function App() {
     isAnimatingRef.current        = false;
     const net                     = initNetwork(layerSizes);
     networkRef.current            = net;
+    optimizerRef.current          = createOptimizer(optimizerTypeRef.current, learningRateRef.current, net);
+    stepModeOptRef.current        = null;
     epochRef.current              = 0;
     lossHistoryRef.current        = [];
     bestLossRef.current           = Infinity;
@@ -2643,10 +2729,12 @@ export default function App() {
 
   const prevArchRef = useRef(null);
   useEffect(() => {
-    const key = layerSizes.join(',') + '|' + activationTypes.join(',');
+    const key = layerSizes.join(',') + '|' + activationTypes.join(',') + '|' + datasetId
+      + '|' + datasetOpts.points + ',' + datasetOpts.noise + ',' + datasetOpts.seed;
     if (prevArchRef.current !== null && prevArchRef.current !== key) initializeNetwork();
     prevArchRef.current = key;
-  }, [layerSizes.join(','), activationTypes.join(',')]);
+  }, [layerSizes.join(','), activationTypes.join(','), datasetId,
+      datasetOpts.points, datasetOpts.noise, datasetOpts.seed]);
 
   // ── Architecture handlers ──────────────────────────────────────────────────
   const handleNumHiddenLayersChange = (n) => {
@@ -2670,7 +2758,7 @@ export default function App() {
     }
 
     const { weights, biases } = networkRef.current;
-    const result = trainOneEpoch(weights, biases, activationTypes, learningRate);
+    const result = trainOneEpoch(weights, biases, activationTypes, learningRate, dataset, optimizerRef.current);
 
     networkRef.current = { weights: result.weights, biases: result.biases };
     setNetwork({ weights: result.weights, biases: result.biases });
@@ -2694,7 +2782,7 @@ export default function App() {
     }
     setEpochsSinceImprovement(epochsSinceImprovRef.current);
 
-    const xorEval = evaluateXOR(result.weights, result.biases, activationTypes);
+    const xorEval = evaluateDataset(result.weights, result.biases, activationTypes, dataset);
     setXorResults(xorEval);
 
     const allHighConf = xorEval.every(r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE);
@@ -2743,7 +2831,7 @@ export default function App() {
     }
 
     return { shouldStop: false };
-  }, [activationTypes, learningRate]);
+  }, [activationTypes, learningRate, dataset]);
 
   // ── RAF training loop ──────────────────────────────────────────────────────
   const STEPS_PER_FRAME = 5;
@@ -2793,12 +2881,66 @@ export default function App() {
 
   const handleReset = () => { initializeNetwork(); };
 
+  // Run all four optimizers from one shared fresh init and overlay their loss
+  // curves. Pure + synchronous (small net, capped epochs) — see runOptimizerComparison.
+  const COMPARE_OPTS   = ['sgd', 'momentum', 'rmsprop', 'adam'];
+  const COMPARE_EPOCHS = 300;
+  const OPT_COLORS     = { sgd: '#60a5fa', momentum: '#a78bfa', rmsprop: '#f59e0b', adam: '#34d399' };
+  const handleCompareOptimizers = () => {
+    const net = initNetwork(layerSizes);
+    const series = runOptimizerComparison(
+      net, activationTypes, dataset, COMPARE_OPTS, learningRate, COMPARE_EPOCHS
+    );
+    // Pivot into Recharts rows: { epoch, sgd, momentum, rmsprop, adam }
+    const rows = Array.from({ length: COMPARE_EPOCHS }, (_, e) => {
+      const row = { epoch: e + 1 };
+      for (const s of series) row[s.type] = s.losses[e];
+      return row;
+    });
+    const finals = Object.fromEntries(series.map(s => [s.type, s.finalLoss]));
+    setCompareData({ rows, finals, epochs: COMPARE_EPOCHS, lr: learningRate });
+  };
+
+  // ── Guided lessons ──────────────────────────────────────────────────────────
+  // Apply a lesson step's declarative setup to the real controls. Setting the
+  // architecture/dataset reuses the normal reset path, so each configured step
+  // starts from a fresh, consistent network.
+  const applyLessonSetup = (setup) => {
+    if (!setup) return;
+    if (setup.datasetId) setDatasetId(setup.datasetId);
+    if (setup.neuronsPerLayer) {
+      setNumHiddenLayers(setup.neuronsPerLayer.length);
+      setNeuronsPerLayer(setup.neuronsPerLayer.slice());
+    }
+    if (setup.activations) setActivationTypes(setup.activations.slice());
+    if (setup.optimizer) setOptimizerType(setup.optimizer);
+    if (setup.lr != null) setLearningRate(setup.lr);
+    if (setup.rightPanelTab) setRightPanelTab(setup.rightPanelTab);
+    if (setup.openCompare) handleCompareOptimizers();
+  };
+
+  // Apply the current step's setup whenever the active lesson/step changes.
+  useEffect(() => {
+    if (lessonsOpen && lessonIdx !== null) {
+      applyLessonSetup(LESSONS[lessonIdx].steps[lessonStep]?.setup);
+    }
+    // applyLessonSetup only reads stable setters; intentionally keyed on position
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lessonsOpen, lessonIdx, lessonStep]);
+
+  const openLessons     = () => { setLessonIdx(null); setLessonStep(0); setLessonsOpen(true); };
+  const pickLesson      = (i) => { setLessonStep(0); setLessonIdx(i); };
+  const lessonNext      = () => setLessonStep(s => Math.min(s + 1, LESSONS[lessonIdx].steps.length - 1));
+  const lessonPrev      = () => setLessonStep(s => Math.max(s - 1, 0));
+  const lessonToMenu    = () => { setLessonIdx(null); setLessonStep(0); };
+  const closeLessons    = () => setLessonsOpen(false);
+
   // ── Forward-pass animation (standalone) ───────────────────────────────────
   const runForwardPassAnimation = useCallback(async () => {
     if (!networkRef.current || isTraining || isAnimatingRef.current) return;
     isAnimatingRef.current = true;
     const { weights, biases } = networkRef.current;
-    const input = XOR_DATA[0].input;
+    const input = (dataset[0] || XOR_DATA[0]).input;
     const { activations, preActivations } = forwardPass(input, weights, biases, activationTypes);
     if (!dismissedCalloutsRef.current.has('firstForward')) {
       setCallouts(prev => new Set([...prev, 'firstForward']));
@@ -2812,7 +2954,7 @@ export default function App() {
     setForwardPassDisplay({ activations, preActivations });
     setLastForwardData({ activations, preActivations });
     isAnimatingRef.current = false;
-  }, [activationTypes, layerSizes.length, isTraining]);
+  }, [activationTypes, layerSizes.length, isTraining, dataset]);
 
   // ── Explained epoch — user-paced 4-stage mode ────────────────────────────
   // startExplainedEpoch pre-computes one training epoch and enters step mode.
@@ -2833,7 +2975,11 @@ export default function App() {
     if (!networkRef.current || isTraining || isAnimatingRef.current) return;
     if (stepModeStage !== 'idle') return;
     const { weights, biases } = networkRef.current;
-    const result = trainOneEpoch(weights, biases, activationTypes, learningRate);
+    // Preview on a throwaway optimizer clone so momentum/Adam buffers only
+    // advance when the user actually applies the epoch (Stage 4), not on preview.
+    const optClone = optimizerRef.current ? cloneOptimizer(optimizerRef.current) : null;
+    stepModeOptRef.current = optClone;
+    const result = trainOneEpoch(weights, biases, activationTypes, learningRate, dataset, optClone);
     stepModeAppliedRef.current = false;
     setStepModeResult(result);
     setStepModeLoss(result.loss);
@@ -2841,7 +2987,7 @@ export default function App() {
     setStepModeLayerAnimDone(false);
     setStepModeStage('forward');
     setTrainingStatus('stepping');
-  }, [activationTypes, learningRate, isTraining, stepModeStage]);
+  }, [activationTypes, learningRate, isTraining, stepModeStage, dataset]);
 
   // Per-stage layer animation: fires on every stage transition.
   // Uses a cancellation token so navigating away stops the in-flight animation.
@@ -2890,6 +3036,8 @@ export default function App() {
         // Apply weights exactly once; re-visiting this stage is idempotent.
         if (!stepModeAppliedRef.current) {
           stepModeAppliedRef.current = true;
+          // Commit the previewed optimizer state (momentum/Adam buffers + timestep).
+          if (stepModeOptRef.current) optimizerRef.current = stepModeOptRef.current;
           networkRef.current = { weights: stepModeResult.weights, biases: stepModeResult.biases };
           setNetwork({ weights: stepModeResult.weights, biases: stepModeResult.biases });
 
@@ -2909,8 +3057,8 @@ export default function App() {
           }
           setEpochsSinceImprovement(epochsSinceImprovRef.current);
 
-          const xorEval = evaluateXOR(
-            stepModeResult.weights, stepModeResult.biases, activationTypes
+          const xorEval = evaluateDataset(
+            stepModeResult.weights, stepModeResult.biases, activationTypes, dataset
           );
           setXorResults(xorEval);
 
@@ -2969,7 +3117,7 @@ export default function App() {
     };
   // stepModeAppliedRef is a ref — intentionally omitted from deps
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stepModeStage, stepModeResult]);
+  }, [stepModeStage, stepModeResult, dataset]);
 
   // Navigation handlers — defined before auto-play effect so Next can reference Done
   const handleExplainedDone = useCallback(() => {
@@ -3078,8 +3226,16 @@ export default function App() {
           <h1 className="text-base font-bold text-white leading-tight">Neural Net Playground</h1>
           <p className="text-xs text-slate-500">Make the math visible.</p>
         </div>
-        <div className="text-xs text-slate-500 font-mono">
-          {layerSizes.join(' → ')}
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-500 font-mono">{layerSizes.join(' → ')}</span>
+          <button onClick={openLessons}
+            className={`text-xs px-2.5 py-1 rounded border transition-colors ${
+              lessonsOpen
+                ? 'bg-indigo-700 text-white border-indigo-500'
+                : 'bg-slate-800 text-indigo-300 border-slate-700 hover:bg-slate-700'
+            }`}>
+            📚 Lessons
+          </button>
         </div>
       </header>
 
@@ -3101,6 +3257,50 @@ export default function App() {
             LEFT PANEL — Architecture + Training Controls
         ═══════════════════════════════════════════════════════════════════ */}
         <div className="w-52 border-r border-slate-700 p-3 flex flex-col gap-3 overflow-y-auto flex-shrink-0">
+          {/* Dataset */}
+          <section>
+            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Dataset</h2>
+            <select value={datasetId} onChange={e => setDatasetId(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-600 rounded text-xs text-white p-1 mb-1.5">
+              <optgroup label="Logical (4 points)">
+                {Object.values(DATASETS).filter(d => d.kind === 'logical').map(d => (
+                  <option key={d.id} value={d.id}>{d.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Geometric (generated)">
+                {Object.values(DATASETS).filter(d => d.kind === 'geometric').map(d => (
+                  <option key={d.id} value={d.id}>{d.label}</option>
+                ))}
+              </optgroup>
+            </select>
+            <p className="text-slate-500 mb-1.5" style={{ fontSize: '10px', lineHeight: 1.3 }}>
+              {datasetSpec.description}
+            </p>
+            {datasetSpec.kind === 'geometric' && (
+              <div className="pl-2 border-l-2 border-slate-700 space-y-1.5">
+                <label className="block">
+                  <span className="text-slate-500" style={{ fontSize: '10px' }}>Points: {datasetOpts.points}</span>
+                  <input type="range" min="20" max="300" step="20" value={datasetOpts.points}
+                    onChange={e => setDatasetOpts(o => ({ ...o, points: +e.target.value }))}
+                    className="w-full accent-emerald-500" />
+                </label>
+                <label className="block">
+                  <span className="text-slate-500" style={{ fontSize: '10px' }}>Noise: {datasetOpts.noise.toFixed(2)}</span>
+                  <input type="range" min="0" max="0.12" step="0.01" value={datasetOpts.noise}
+                    onChange={e => setDatasetOpts(o => ({ ...o, noise: +e.target.value }))}
+                    className="w-full accent-emerald-500" />
+                </label>
+                <div className="flex items-center gap-1">
+                  <span className="text-slate-500 flex-1" style={{ fontSize: '10px' }}>Seed: {datasetOpts.seed}</span>
+                  <button onClick={() => setDatasetOpts(o => ({ ...o, seed: o.seed + 1 }))}
+                    className="text-xs px-1.5 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">
+                    ↻ reshuffle
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+
           {/* Architecture */}
           <section>
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Architecture</h2>
@@ -3136,6 +3336,20 @@ export default function App() {
           {/* Training controls */}
           <section>
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Training</h2>
+
+            <label className="block mb-1">
+              <span className="text-xs text-slate-400">Optimizer</span>
+              <select value={optimizerType} onChange={e => setOptimizerType(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-600 rounded text-xs text-white p-1 mt-0.5">
+                {Object.values(OPTIMIZERS).map(o => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <p className="text-slate-500 mb-2" style={{ fontSize: '10px', lineHeight: 1.3 }}>
+              {OPTIMIZERS[optimizerType].description}
+            </p>
+
             <label className="block mb-2">
               <span className="text-xs text-slate-400">LR: {learningRate.toFixed(3)}</span>
               <input type="range" min="0.001" max="1" step="0.001" value={learningRate}
@@ -3183,6 +3397,10 @@ export default function App() {
               <button onClick={runForwardPassAnimation} disabled={isBusy}
                 className="w-full py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-40">
                 Forward Pass ▶
+              </button>
+              <button onClick={handleCompareOptimizers} disabled={isBusy}
+                className="w-full py-1 rounded text-xs bg-slate-800 hover:bg-emerald-900/40 text-emerald-300/90 border border-slate-700 disabled:opacity-40">
+                ⚖ Compare Optimizers
               </button>
               <button onClick={handleReset}
                 className="w-full py-1 rounded text-xs bg-slate-800 hover:bg-red-900/50 text-slate-400 hover:text-red-300 border border-slate-700">
@@ -3275,7 +3493,7 @@ export default function App() {
                 {stepModeStage === 'loss' && (
                   <div>
                     <div className={`font-bold ${col.title} mb-0.5`}>📊 Loss Calculation</div>
-                    <div className="text-slate-300">Binary Cross-Entropy penalizes wrong-confident predictions harshly. Lower = better fit to all 4 XOR samples.</div>
+                    <div className="text-slate-300">Binary Cross-Entropy penalizes wrong-confident predictions harshly. Lower = better fit to the training samples.</div>
                     <div className="mt-1 font-mono text-amber-400">
                       L = −(1/4)·Σ[y·log(ŷ)+(1−y)·log(1−ŷ)] = <span className="text-amber-200 font-bold">{stepModeLoss?.toFixed(6)}</span>
                     </div>
@@ -3394,6 +3612,7 @@ export default function App() {
                   weights={network.weights}
                   biases={network.biases}
                   hiddenActivationTypes={activationTypes}
+                  dataset={dataset}
                   inferencePoint={inferencePoint}
                   onClick={handleCanvasClick}
                   showConfidence={showConfidence}
@@ -3473,11 +3692,15 @@ export default function App() {
             layerSizes={layerSizes}
             hiddenActivationTypes={activationTypes}
             learningRate={learningRate}
+            optimizerType={optimizerType}
+            datasetId={datasetId}
+            dataset={dataset}
+            datasetSpec={datasetSpec}
           />
 
           <div className="flex-shrink-0 p-3 border-b border-slate-700">
             <div className="bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
-              <XorVerifyPanel xorResults={xorResults} />
+              <XorVerifyPanel xorResults={xorResults} datasetSpec={datasetSpec} />
             </div>
           </div>
 
@@ -3490,10 +3713,12 @@ export default function App() {
                 { id: 'gradcheck',label: '∂w Check', active: 'text-indigo-400 border-indigo-500'},
                 { id: 'weights',  label: 'Weights',  active: 'text-amber-400 border-amber-500'  },
                 { id: 'calc',     label: '∫ Calc',   active: 'text-emerald-400 border-emerald-500'},
+                { id: 'surface',  label: 'Surface',  active: 'text-pink-400 border-pink-500'    },
               ].map(({ id, label, active }) => (
                 <button key={id}
                   onClick={() => setRightPanelTab(id)}
-                  className={`flex-1 text-xs py-1.5 font-medium transition-colors ${
+                  style={{ fontSize: '11px' }}
+                  className={`flex-1 py-1.5 font-medium transition-colors ${
                     rightPanelTab === id
                       ? `${active} bg-slate-800/50 border-b-2`
                       : 'text-slate-500 hover:text-slate-300'
@@ -3520,8 +3745,20 @@ export default function App() {
                   network={network}
                   layerSizes={layerSizes}
                   hiddenActivationTypes={activationTypes}
+                  dataset={dataset}
                   lastGradients={lastGradients}
                   lastForwardData={lastForwardData}
+                />
+              )}
+              {rightPanelTab === 'surface' && (
+                <LossSurfacePanel
+                  key={layerSizes.join('-')}
+                  network={network}
+                  hiddenActivationTypes={activationTypes}
+                  dataset={dataset}
+                  lastGradients={lastGradients}
+                  learningRate={learningRate}
+                  optimizerType={optimizerType}
                 />
               )}
               {(rightPanelTab === 'audit' || rightPanelTab === 'gradcheck') && (
@@ -3531,6 +3768,7 @@ export default function App() {
                       xorResults={xorResults}
                       hiddenActivationTypes={activationTypes}
                       layerSizes={layerSizes}
+                      dataset={dataset}
                     />
                   ) : (
                     <GradientCheckPanel
@@ -3538,6 +3776,7 @@ export default function App() {
                       hiddenActivationTypes={activationTypes}
                       layerSizes={layerSizes}
                       lastGradients={lastGradients}
+                      dataset={dataset}
                     />
                   )}
                 </div>
@@ -3562,6 +3801,70 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {/* ── Guided lessons player ────────────────────────────────────────────── */}
+      {lessonsOpen && (
+        <LessonsPanel
+          lessonIdx={lessonIdx}
+          stepIdx={lessonStep}
+          onPick={pickLesson}
+          onPrev={lessonPrev}
+          onNext={lessonNext}
+          onExitToMenu={lessonToMenu}
+          onClose={closeLessons}
+        />
+      )}
+
+      {/* ── Optimizer comparison overlay ─────────────────────────────────────── */}
+      {compareData && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"
+          onClick={() => setCompareData(null)}>
+          <div className="bg-slate-900 border border-slate-700 rounded-lg shadow-2xl w-full max-w-3xl p-4"
+            onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-sm font-bold text-white">Optimizer comparison</h3>
+              <button onClick={() => setCompareData(null)}
+                className="text-slate-500 hover:text-slate-200 text-lg leading-none">×</button>
+            </div>
+            <p className="text-xs text-slate-500 mb-3">
+              All four optimizers trained from the <span className="text-slate-300">same</span> fresh
+              initialization on <span className="text-slate-300">{datasetSpec.label}</span> ·
+              arch {layerSizes.join('→')} · lr {compareData.lr.toFixed(3)} · {compareData.epochs} epochs.
+              BCE loss (lower = better).
+            </p>
+            <div style={{ width: '100%', height: 280 }}>
+              <ResponsiveContainer>
+                <LineChart data={compareData.rows} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+                  <CartesianGrid stroke="#1e293b" />
+                  <XAxis dataKey="epoch" stroke="#64748b" tick={{ fontSize: 10 }}
+                    label={{ value: 'epoch', position: 'insideBottom', offset: -2, fill: '#64748b', fontSize: 10 }} />
+                  <YAxis stroke="#64748b" tick={{ fontSize: 10 }} width={44} domain={[0, 'auto']} />
+                  <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', fontSize: 11 }}
+                    formatter={(v, n) => [v.toFixed(4), OPTIMIZERS[n]?.label || n]} />
+                  {COMPARE_OPTS.map(type => (
+                    <Line key={type} type="monotone" dataKey={type} stroke={OPT_COLORS[type]}
+                      dot={false} strokeWidth={1.6} isAnimationActive={false} />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex flex-wrap gap-3 mt-2 text-xs">
+              {COMPARE_OPTS.map(type => (
+                <div key={type} className="flex items-center gap-1.5">
+                  <span className="inline-block w-3 h-0.5 rounded" style={{ background: OPT_COLORS[type] }} />
+                  <span className="text-slate-300">{OPTIMIZERS[type].label}</span>
+                  <span className="text-slate-500 font-mono">
+                    {compareData.finals[type] != null ? compareData.finals[type].toFixed(4) : '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="text-slate-600 mt-2" style={{ fontSize: '10px' }}>
+              This run does not change your current network — it trains throwaway copies just for the chart.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
