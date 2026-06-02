@@ -42,6 +42,8 @@ import {
   updateWeights,
   trainOneEpoch,
   runOptimizerComparison,
+  computeLossSurface,
+  computeDescentPath,
   computeDecisionBoundary,
   evaluateDataset,
   checkConvergence,
@@ -1146,6 +1148,166 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGr
             Relative error = |err| / (|backprop| + |fd|)
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// COMPONENT: LossSurfacePanel
+//
+// A 2-D slice of the loss landscape over two chosen weights (every other
+// parameter held fixed), drawn as a real-loss heatmap. Overlays the live
+// position of those weights and, optionally, the trajectory they trace during
+// a real optimization run. See src/nn/surface.js for the math and caveats.
+// =============================================================================
+const SURF_SZ   = 236;
+const SURF_GRID = 31;
+
+// Loss heatmap colour: best (min) = emerald, worst (max) = deep slate.
+function surfaceColor(loss, min, max) {
+  const t = max > min ? (loss - min) / (max - min) : 0;
+  const lo = [16, 185, 129], hi = [15, 23, 42];
+  const c = i => Math.round(lo[i] * (1 - t) + hi[i] * t);
+  return `rgb(${c(0)},${c(1)},${c(2)})`;
+}
+
+function LossSurfacePanel({ network, hiddenActivationTypes, dataset, lastGradients, learningRate, optimizerType }) {
+  const canvasRef = useRef(null);
+  const [span, setSpan]       = useState(3);
+  const [showPath, setShowPath] = useState(false);
+  const [surface, setSurface] = useState(null);
+  const [path, setPath]       = useState(null);
+
+  // Flat list of every weight coordinate for the axis dropdowns.
+  const coords = [];
+  network?.weights.forEach((M, l) => M.forEach((row, j) => row.forEach((_, k) => coords.push([l, j, k]))));
+  const keyOf = c => c.join('-');
+  const labelOf = c => `W${c[0]}[${c[1]}][${c[2]}]`;
+
+  // Default axes: the two largest-gradient weights if known, else the first two.
+  const defaults = () => {
+    if (lastGradients) {
+      const ranked = [];
+      lastGradients.dWeights.forEach((M, l) => M.forEach((row, j) => row.forEach((v, k) =>
+        ranked.push({ c: [l, j, k], m: Math.abs(v) }))));
+      ranked.sort((a, b) => b.m - a.m);
+      if (ranked.length >= 2) return [ranked[0].c, ranked[1].c];
+    }
+    return [coords[0] || [0, 0, 0], coords[1] || coords[0] || [0, 0, 1]];
+  };
+  const [coordA, setCoordA] = useState(() => defaults()[0]);
+  const [coordB, setCoordB] = useState(() => defaults()[1]);
+
+  // Recompute the surface when the axes or span change (snapshot of the current
+  // network — other weights are held at their present values).
+  const optsKey = keyOf(coordA) + '|' + keyOf(coordB) + '|' + span;
+  useEffect(() => {
+    if (!network) return;
+    setSurface(computeLossSurface(network, hiddenActivationTypes, dataset, coordA, coordB, { span, gridSize: SURF_GRID }));
+    setPath(null);
+    setShowPath(false);
+    // network read fresh at compute time; recompute is user-driven via axes/span
+    // and re-runs when the dataset changes. Not keyed on per-epoch network churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optsKey, dataset]);
+
+  const handleRunDescent = () => {
+    if (!network) return;
+    const p = computeDescentPath(network, hiddenActivationTypes, dataset, coordA, coordB, learningRate, 200, optimizerType);
+    setPath(p);
+    setShowPath(true);
+  };
+
+  // Draw heatmap + trajectory + live marker.
+  useEffect(() => {
+    if (!surface || !canvasRef.current) return;
+    const ctx = canvasRef.current.getContext('2d');
+    const cell = SURF_SZ / SURF_GRID;
+    const a0 = surface.aVals[0], a1 = surface.aVals.at(-1);
+    const b0 = surface.bVals[0], b1 = surface.bVals.at(-1);
+    const toPx = (a, b) => ({
+      x: ((a - a0) / (a1 - a0)) * SURF_SZ,
+      y: (1 - (b - b0) / (b1 - b0)) * SURF_SZ, // b axis points up
+    });
+
+    ctx.clearRect(0, 0, SURF_SZ, SURF_SZ);
+    for (let bi = 0; bi < SURF_GRID; bi++) {
+      for (let ai = 0; ai < SURF_GRID; ai++) {
+        ctx.fillStyle = surfaceColor(surface.grid[bi][ai], surface.min, surface.max);
+        ctx.fillRect(ai * cell, (SURF_GRID - 1 - bi) * cell, cell + 1, cell + 1);
+      }
+    }
+
+    // Trajectory polyline (clamped points still drawn; off-grid points clip).
+    if (showPath && path && path.length > 1) {
+      ctx.beginPath();
+      path.forEach((pt, i) => {
+        const { x, y } = toPx(pt.a, pt.b);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 1.5; ctx.stroke();
+      const end = toPx(path.at(-1).a, path.at(-1).b);
+      ctx.fillStyle = '#fbbf24';
+      ctx.beginPath(); ctx.arc(end.x, end.y, 3, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Live marker = current values of the two weights (moves as you train).
+    const cur = toPx(network.weights[coordA[0]][coordA[1]][coordA[2]],
+                     network.weights[coordB[0]][coordB[1]][coordB[2]]);
+    ctx.beginPath(); ctx.arc(cur.x, cur.y, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#f472b6'; ctx.fill();
+    ctx.strokeStyle = 'white'; ctx.lineWidth = 1.5; ctx.stroke();
+  }, [surface, path, showPath, network, coordA, coordB]);
+
+  if (!network) return (
+    <div className="text-xs text-slate-600 italic">Initialize the network first.</div>
+  );
+
+  const sel = (value, onChange) => (
+    <select value={value} onChange={e => onChange(e.target.value.split('-').map(Number))}
+      className="bg-slate-800 border border-slate-600 rounded text-white px-1 py-0.5" style={{ fontSize: '10px' }}>
+      {coords.map(c => <option key={keyOf(c)} value={keyOf(c)}>{labelOf(c)}</option>)}
+    </select>
+  );
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Loss Surface</span>
+      </div>
+      <p className="text-slate-500" style={{ fontSize: '10px', lineHeight: 1.3 }}>
+        Real BCE loss over two weights; all others fixed. A 2-D slice of a high-dimensional surface.
+      </p>
+
+      <div className="flex items-center gap-1.5 flex-wrap" style={{ fontSize: '10px' }}>
+        <span className="text-pink-300">x:</span> {sel(keyOf(coordA), setCoordA)}
+        <span className="text-pink-300 ml-1">y:</span> {sel(keyOf(coordB), setCoordB)}
+      </div>
+
+      <canvas ref={canvasRef} width={SURF_SZ} height={SURF_SZ}
+        className="rounded border border-slate-700 block mx-auto" />
+
+      <label className="block">
+        <span className="text-slate-500" style={{ fontSize: '10px' }}>Zoom (±{span.toFixed(1)} around current)</span>
+        <input type="range" min="0.5" max="6" step="0.5" value={span}
+          onChange={e => setSpan(parseFloat(e.target.value))} className="w-full accent-emerald-500" />
+      </label>
+
+      <button onClick={handleRunDescent}
+        className="w-full py-1 rounded text-xs bg-slate-800 hover:bg-amber-900/40 text-amber-300/90 border border-slate-700">
+        ↘ Trace descent path (200 epochs)
+      </button>
+
+      <div className="flex items-center gap-3" style={{ fontSize: '10px' }}>
+        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-pink-400 border border-white" />current</span>
+        {path && <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" />path</span>}
+        <span className="text-slate-600">emerald = lower loss</span>
+      </div>
+      {path && (
+        <p className="text-slate-600" style={{ fontSize: '9px', lineHeight: 1.3 }}>
+          The path is the real optimizer trajectory projected onto these two axes — all other weights move too, so it can drift off this static slice's valley.
+        </p>
       )}
     </div>
   );
@@ -3417,10 +3579,12 @@ export default function App() {
                 { id: 'gradcheck',label: '∂w Check', active: 'text-indigo-400 border-indigo-500'},
                 { id: 'weights',  label: 'Weights',  active: 'text-amber-400 border-amber-500'  },
                 { id: 'calc',     label: '∫ Calc',   active: 'text-emerald-400 border-emerald-500'},
+                { id: 'surface',  label: 'Surface',  active: 'text-pink-400 border-pink-500'    },
               ].map(({ id, label, active }) => (
                 <button key={id}
                   onClick={() => setRightPanelTab(id)}
-                  className={`flex-1 text-xs py-1.5 font-medium transition-colors ${
+                  style={{ fontSize: '11px' }}
+                  className={`flex-1 py-1.5 font-medium transition-colors ${
                     rightPanelTab === id
                       ? `${active} bg-slate-800/50 border-b-2`
                       : 'text-slate-500 hover:text-slate-300'
@@ -3450,6 +3614,17 @@ export default function App() {
                   dataset={dataset}
                   lastGradients={lastGradients}
                   lastForwardData={lastForwardData}
+                />
+              )}
+              {rightPanelTab === 'surface' && (
+                <LossSurfacePanel
+                  key={layerSizes.join('-')}
+                  network={network}
+                  hiddenActivationTypes={activationTypes}
+                  dataset={dataset}
+                  lastGradients={lastGradients}
+                  learningRate={learningRate}
+                  optimizerType={optimizerType}
                 />
               )}
               {(rightPanelTab === 'audit' || rightPanelTab === 'gradcheck') && (

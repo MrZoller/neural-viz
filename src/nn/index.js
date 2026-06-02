@@ -6,6 +6,7 @@
 export { ACTIVATIONS, computeActivationCurve } from './activations.js';
 export { XOR_DATA, DATASETS, DEFAULT_DATASET_OPTS, makeDataset } from './datasets.js';
 export { OPTIMIZERS, createOptimizer, cloneOptimizer, optimizerStep } from './optimizers.js';
+export { computeLossSurface, computeDescentPath } from './surface.js';
 export {
   initNetwork,
   forwardPass,

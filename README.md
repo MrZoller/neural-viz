@@ -54,6 +54,7 @@ Convergence auto-stops when loss drops below 0.001, or when all 4 XOR points are
 | **∂w Check** | Backprop gradient vs symmetric finite-difference estimate `[L(w+ε)−L(w−ε)] / 2ε`; auto-pick selects the weight with the largest `\|∂L/∂w\|` |
 | **Weights** | Color-coded weight matrices and bias vectors per layer (amber = positive, blue = negative); parameter JSON export |
 | **∫ Calc** | Chain Rule Tracer and Activation Function Explorer (see below) |
+| **Surface** | 2-D loss-landscape slice over two selectable weights (real-loss heatmap), with a live position marker, zoom, and an optimizer descent-path overlay |
 
 ### ∫ Calc — Calculus panel
 
@@ -235,7 +236,7 @@ This tool makes deliberate simplifications for educational clarity. Each simplif
 | Fixed output activation | Output is always sigmoid regardless of hidden activations chosen |
 | Binary classification only | Two classes; output is a single sigmoid probability |
 | PyTorch code is explanatory | Generated scripts embed the active dataset's points but reinitialize weights randomly; use the Weights tab to export trained values |
-| 2D loss surface would be a slice | The actual loss landscape has as many dimensions as there are parameters |
+| Loss surface is a 2-D slice | The Surface tab plots real loss over two weights with all others fixed; the true landscape has as many dimensions as there are parameters, and the descent-path overlay is the trajectory projected onto those two axes |
 
 ---
 

@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Math core extracted from `App.jsx` into `src/nn/`** — activation functions, network (init/forward/loss/backprop/update/decision boundary), training/evaluation/convergence, and the finite-difference gradient check now live in dedicated, React-free modules (`activations.js`, `datasets.js`, `network.js`, `training.js`) re-exported through `src/nn/index.js`. Behaviour is unchanged; `App.jsx` imports the same functions it previously defined inline.
 
 ### Added
+- **Loss surface viewer** (Surface tab) — a 2-D slice of the loss landscape over two selectable weights, drawn as a real-loss heatmap (emerald = lower loss) from genuine full-batch forward passes. Shows the live position of the two weights as a marker, a zoom control, and an optional "trace descent path" overlay that runs a real optimization and projects the trajectory onto the two axes. Backed by `computeLossSurface` / `computeDescentPath` (pure, non-mutating, unit-tested).
 - **Optimizer comparison** — a "⚖ Compare Optimizers" button trains all four optimizers from one shared fresh initialization (same architecture, dataset, lr) and overlays their BCE-loss curves in a modal, with a final-loss legend. The pure runner (`runOptimizerComparison`) is unit-tested and leaves the live network untouched (it trains throwaway copies).
 - **Optimizers** — choose SGD, Momentum, RMSProp, or Adam from the Training panel. Implemented from scratch in `src/nn/optimizers.js` (matching PyTorch's hyper-parameters) and unit-tested, including a test that Adam beats SGD on XOR at equal lr/epochs. Switching optimizer rebuilds its momentum/moment buffers; changing the learning rate updates it in place. The explained-step preview runs on a throwaway optimizer clone so buffers only commit when an epoch is actually applied. The PyTorch export emits the matching optimizer (`SGD`/`SGD+momentum`/`RMSprop`/`Adam`).
 - **Dataset-aware PyTorch export** — the generated `.py` script, `.ipynb` notebook, and the inline code snippet now embed the **active dataset's** actual points (logical gates inline, geometric datasets one point per line) and train on them, with dataset-specific titles, descriptions, and verification. The notebook filename follows the dataset (`neural-viz-<id>.ipynb`). Weights are still randomly re-initialized (stated in the files); the previous "still trains on XOR" disclaimer is removed.
@@ -22,9 +23,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Planned
 - Click-to-draw datasets: place class-0/class-1 points directly on the boundary canvas and train on them
-- Optimizers: momentum / RMSProp / Adam with a side-by-side loss-curve comparison
+- Guided lessons / tour mode: a structured walkthrough ("why can't one layer solve XOR?" → add a hidden layer → watch the boundary bend)
 - Gradient flow summary: per-layer average/max/min gradient magnitudes, dead-ReLU count, vanishing-gradient flag
-- Loss surface viewer: 2D slice over two selected weights with current-position marker
 - Test batch panel: add multiple test points, view predicted class and confidence table
 
 ---
