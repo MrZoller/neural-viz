@@ -197,7 +197,7 @@ Verifies that the backpropagation code is correct by comparing the analytical gr
 - **Auto-pick max |∂w|** jumps to the weight with the largest current gradient — a good place to check because large-gradient weights have the most visible numeric disagreement when broken.
 - Click **Run** to execute the check on the selected weight.
 
-A relative error below ~1 × 10⁻⁴ means backprop is correct. The app's 37-unit test suite runs this same check across 40 randomly generated architectures and activation combinations.
+A relative error below ~1 × 10⁻⁴ means backprop is correct. The app's 69-unit test suite runs this same check across 40 randomly generated architectures and activation combinations.
 
 ### Weights Tab
 
@@ -355,7 +355,7 @@ Use **Copy Script** or **Notebook** for a fresh runnable experiment. If you want
 Open **∫ Calc → f(z) Plot** and step through each hidden neuron. If `z ≤ 0` for all four XOR inputs, that neuron is dead and contributes nothing to the forward pass. Solutions: Reset (new random seed), switch to Tanh or Sigmoid for that layer, or add more neurons.
 
 **Checking if the math is correct?**
-Open **∂w Check**, pick any weight, and click **Run**. A relative error below ~1×10⁻⁴ means the backprop gradient matches the finite-difference estimate. This is the same numerical test the 37-unit Vitest suite runs on every commit.
+Open **∂w Check**, pick any weight, and click **Run**. A relative error below ~1×10⁻⁴ means the backprop gradient matches the finite-difference estimate. This is the same numerical test the 69-unit Vitest suite runs on every commit.
 
 ---
 
