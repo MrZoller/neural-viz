@@ -32,6 +32,9 @@ import {
   DATASETS,
   DEFAULT_DATASET_OPTS,
   makeDataset,
+  OPTIMIZERS,
+  createOptimizer,
+  cloneOptimizer,
   initNetwork,
   forwardPass,
   computeLoss,
@@ -72,7 +75,18 @@ function datasetToPython(dataset) {
   };
 }
 
-function generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec) {
+// Map the playground's optimizer choice to the matching PyTorch constructor,
+// using the same hyper-parameters as src/nn/optimizers.js.
+function pyOptimizer(optimizerType, lr) {
+  switch (optimizerType) {
+    case 'momentum': return { ctor: `torch.optim.SGD(model.parameters(), lr=${lr}, momentum=0.9)`, label: 'SGD + momentum' };
+    case 'rmsprop':  return { ctor: `torch.optim.RMSprop(model.parameters(), lr=${lr}, alpha=0.99)`, label: 'RMSprop' };
+    case 'adam':     return { ctor: `torch.optim.Adam(model.parameters(), lr=${lr}, betas=(0.9, 0.999))`, label: 'Adam' };
+    default:         return { ctor: `torch.optim.SGD(model.parameters(), lr=${lr})`, label: 'SGD' };
+  }
+}
+
+function generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec, optimizerType = 'sgd') {
   const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
   const pts  = datasetToPython(dataset);
   const name = datasetSpec?.label || 'dataset';
@@ -94,8 +108,7 @@ model = nn.Sequential(
 ${layers})
 
 criterion = nn.BCELoss()
-optimizer = torch.optim.SGD(
-    model.parameters(), lr=0.1)
+optimizer = ${pyOptimizer(optimizerType, 0.1).ctor}
 
 # Dataset: ${name} (${dataset.length} points, from the playground)
 X = torch.tensor(${pts.X}, dtype=torch.float)
@@ -121,11 +134,12 @@ for epoch in range(max_epochs):
 // randomly. The architecture and hyper-parameters do match the current UI.
 // =============================================================================
 
-function generateFullScript(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec) {
+function generateFullScript(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec, optimizerType = 'sgd') {
   const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
   const pts  = datasetToPython(dataset);
   const name = datasetSpec?.label || 'Dataset';
   const desc = datasetSpec?.description || '';
+  const opt  = pyOptimizer(optimizerType, learningRate);
   const paramCount = layerSizes.slice(0, -1).reduce(
     (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
   );
@@ -173,9 +187,9 @@ print(f"Parameters: {sum(p.numel() for p in model.parameters())}")
 
 # -- Loss and optimizer -------------------------------------------------------
 # BCELoss: L = -(1/N) * sum[y*log(y_hat) + (1-y)*log(1-y_hat)]
-# SGD:     W <- W - lr * dL/dW   (same update rule as the simulator)
+# Optimizer: ${opt.label} (matches the optimizer selected in the playground)
 criterion = nn.BCELoss()
-optimizer  = torch.optim.SGD(model.parameters(), lr=${learningRate})
+optimizer  = ${opt.ctor}
 
 # -- Training loop ------------------------------------------------------------
 losses = []
@@ -251,12 +265,13 @@ print(f"\\nInference: {test_pt.tolist()[0]} -> p(1)={prob:.4f}, "
 // Generates an .ipynb JSON that Jupyter can open directly.
 // Architecture, activations, and learning rate match the current UI state.
 // Each cell's source is an array of line-strings as the nbformat v4 spec requires.
-function generateNotebook(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec) {
+function generateNotebook(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec, optimizerType = 'sgd') {
   const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
   const pts     = datasetToPython(dataset);
   const name    = datasetSpec?.label || 'Dataset';
   const desc    = datasetSpec?.description || '';
   const isLogical = datasetSpec?.kind === 'logical';
+  const opt     = pyOptimizer(optimizerType, learningRate);
   const paramCount = layerSizes.slice(0, -1).reduce(
     (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
   );
@@ -309,7 +324,7 @@ simulator that trains on the **${name}** dataset using real backpropagation
 | Hidden activations | ${actStr} |
 | Output activation | Sigmoid |
 | Loss function | Binary Cross-Entropy (BCELoss) |
-| Optimizer | SGD, lr = ${learningRate} |
+| Optimizer | ${opt.label}, lr = ${learningRate} |
 | Total parameters | ${paramCount} |
 
 > **Note:** Weights are randomly re-initialized here, not copied from the simulator.
@@ -356,12 +371,13 @@ print(model)`),
 
 $$L = -\\frac{1}{N} \\sum_{i=1}^{N} \\bigl[ y_i \\log(\\hat{y}_i) + (1-y_i)\\log(1-\\hat{y}_i) \\bigr]$$
 
-**SGD** updates weights via gradient descent:
+The optimizer (**${opt.label}**) updates weights from the gradient; the base
+gradient-descent step is:
 
 $$W \\leftarrow W - \\eta \\cdot \\frac{\\partial L}{\\partial W}, \\quad \\eta = ${learningRate}$$`),
 
       code(`criterion = nn.BCELoss()
-optimizer  = torch.optim.SGD(model.parameters(), lr=${learningRate})
+optimizer  = ${opt.ctor}  # ${opt.label}
 print(criterion)
 print(optimizer)`),
 
@@ -2164,7 +2180,7 @@ function ConceptCallout({ type, onDismiss, trainingStatus, hiddenActivationTypes
 // Weights are NOT exported — the generated code reinitializes randomly.
 // A note in the UI and the exported files makes this explicit.
 // =============================================================================
-function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, datasetId, dataset, datasetSpec }) {
+function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, optimizerType, datasetId, dataset, datasetSpec }) {
   const [codeExpanded, setCodeExpanded] = useState(false);
   const [copyDone,     setCopyDone]     = useState(false);
 
@@ -2172,9 +2188,10 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, dataset
     (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
   );
   const actLabels = hiddenActivationTypes.map(t => ACTIVATIONS[t]?.label || t).join(', ');
+  const optLabel  = OPTIMIZERS[optimizerType]?.label || 'SGD';
 
   const handleCopyScript = () => {
-    const script = generateFullScript(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec);
+    const script = generateFullScript(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec, optimizerType);
     const write = () => {
       if (navigator.clipboard?.writeText) {
         navigator.clipboard.writeText(script).catch(fallback);
@@ -2193,7 +2210,7 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, dataset
   };
 
   const handleExportNotebook = () => {
-    const nb   = generateNotebook(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec);
+    const nb   = generateNotebook(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec, optimizerType);
     const blob = new Blob([JSON.stringify(nb, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -2224,7 +2241,7 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, dataset
         </div>
         <div>
           <span className="text-slate-600">opt   </span>
-          <span className="text-slate-300">SGD lr={learningRate.toFixed(3)}</span>
+          <span className="text-slate-300">{optLabel} lr={learningRate.toFixed(3)}</span>
           <span className="text-slate-600"> · </span>
           <span className="text-slate-300">BCELoss</span>
         </div>
@@ -2292,7 +2309,7 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, dataset
         <div className="bg-gray-950 border-t border-slate-800 overflow-y-auto"
              style={{ maxHeight: '220px' }}>
           <pre className="text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap p-3">
-            {generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec)}
+            {generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec, optimizerType)}
           </pre>
         </div>
       )}
@@ -2331,6 +2348,7 @@ export default function App() {
   const [epoch,                  setEpoch]                  = useState(0);
   const [lossHistory,            setLossHistory]            = useState([]);
   const [learningRate,           setLearningRate]           = useState(0.1);
+  const [optimizerType,          setOptimizerType]          = useState('sgd');
   const [bestLoss,               setBestLoss]               = useState(Infinity);
   const [epochsSinceImprovement, setEpochsSinceImprovement] = useState(0);
   const [maxEpochs,              setMaxEpochs]              = useState(10000);
@@ -2382,9 +2400,29 @@ export default function App() {
   const isAnimatingRef        = useRef(false); // prevents concurrent animation runs
   const stepModeAutoTimerRef  = useRef(null);  // setTimeout ID for explained-step auto-play
   const stepModeAppliedRef    = useRef(false); // prevents double weight-apply on revisit of update stage
+  const optimizerRef          = useRef(null);  // live optimizer (owns momentum/Adam buffers)
+  const stepModeOptRef        = useRef(null);  // throwaway optimizer clone for the explained-step preview
 
+  const optimizerTypeRef = useRef('sgd');
+  const learningRateRef  = useRef(0.1);
   useEffect(() => { dismissedCalloutsRef.current = dismissedCallouts; }, [dismissedCallouts]);
   useEffect(() => { maxEpochsRef.current = maxEpochs; }, [maxEpochs]);
+  useEffect(() => { optimizerTypeRef.current = optimizerType; }, [optimizerType]);
+  useEffect(() => { learningRateRef.current = learningRate; }, [learningRate]);
+
+  // Optimizer lifecycle:
+  //  • learning-rate change → update lr in place (keep momentum/Adam buffers)
+  //  • optimizer-type change → rebuild from the current network (reset buffers)
+  useEffect(() => {
+    if (optimizerRef.current) optimizerRef.current.cfg.lr = learningRate;
+  }, [learningRate]);
+  useEffect(() => {
+    if (networkRef.current) {
+      optimizerRef.current = createOptimizer(optimizerType, learningRate, networkRef.current);
+    }
+    // lr is read fresh above; intentionally not a dependency here
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optimizerType]);
 
   const layerSizes = [2, ...neuronsPerLayer.slice(0, numHiddenLayers), 1];
 
@@ -2395,6 +2433,8 @@ export default function App() {
     isAnimatingRef.current        = false;
     const net                     = initNetwork(layerSizes);
     networkRef.current            = net;
+    optimizerRef.current          = createOptimizer(optimizerTypeRef.current, learningRateRef.current, net);
+    stepModeOptRef.current        = null;
     epochRef.current              = 0;
     lossHistoryRef.current        = [];
     bestLossRef.current           = Infinity;
@@ -2460,7 +2500,7 @@ export default function App() {
     }
 
     const { weights, biases } = networkRef.current;
-    const result = trainOneEpoch(weights, biases, activationTypes, learningRate, dataset);
+    const result = trainOneEpoch(weights, biases, activationTypes, learningRate, dataset, optimizerRef.current);
 
     networkRef.current = { weights: result.weights, biases: result.biases };
     setNetwork({ weights: result.weights, biases: result.biases });
@@ -2623,7 +2663,11 @@ export default function App() {
     if (!networkRef.current || isTraining || isAnimatingRef.current) return;
     if (stepModeStage !== 'idle') return;
     const { weights, biases } = networkRef.current;
-    const result = trainOneEpoch(weights, biases, activationTypes, learningRate, dataset);
+    // Preview on a throwaway optimizer clone so momentum/Adam buffers only
+    // advance when the user actually applies the epoch (Stage 4), not on preview.
+    const optClone = optimizerRef.current ? cloneOptimizer(optimizerRef.current) : null;
+    stepModeOptRef.current = optClone;
+    const result = trainOneEpoch(weights, biases, activationTypes, learningRate, dataset, optClone);
     stepModeAppliedRef.current = false;
     setStepModeResult(result);
     setStepModeLoss(result.loss);
@@ -2680,6 +2724,8 @@ export default function App() {
         // Apply weights exactly once; re-visiting this stage is idempotent.
         if (!stepModeAppliedRef.current) {
           stepModeAppliedRef.current = true;
+          // Commit the previewed optimizer state (momentum/Adam buffers + timestep).
+          if (stepModeOptRef.current) optimizerRef.current = stepModeOptRef.current;
           networkRef.current = { weights: stepModeResult.weights, biases: stepModeResult.biases };
           setNetwork({ weights: stepModeResult.weights, biases: stepModeResult.biases });
 
@@ -2970,6 +3016,20 @@ export default function App() {
           {/* Training controls */}
           <section>
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Training</h2>
+
+            <label className="block mb-1">
+              <span className="text-xs text-slate-400">Optimizer</span>
+              <select value={optimizerType} onChange={e => setOptimizerType(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-600 rounded text-xs text-white p-1 mt-0.5">
+                {Object.values(OPTIMIZERS).map(o => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <p className="text-slate-500 mb-2" style={{ fontSize: '10px', lineHeight: 1.3 }}>
+              {OPTIMIZERS[optimizerType].description}
+            </p>
+
             <label className="block mb-2">
               <span className="text-xs text-slate-400">LR: {learningRate.toFixed(3)}</span>
               <input type="range" min="0.001" max="1" step="0.001" value={learningRate}
@@ -3308,6 +3368,7 @@ export default function App() {
             layerSizes={layerSizes}
             hiddenActivationTypes={activationTypes}
             learningRate={learningRate}
+            optimizerType={optimizerType}
             datasetId={datasetId}
             dataset={dataset}
             datasetSpec={datasetSpec}

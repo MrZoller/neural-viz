@@ -28,6 +28,7 @@ No ML libraries. No backend. No mocked values. Every number you see is computed 
 
 | Control | Description |
 |---|---|
+| **Optimizer** | SGD, Momentum, RMSProp, or Adam — implemented from scratch, matching PyTorch's defaults |
 | **Train / Pause** | Continuous full-batch gradient descent |
 | **Step** | Advance one epoch at a time |
 | **Explained Step** | 4-stage interactive walkthrough: Forward → Loss → Backward → Update, with Next / Prev / Auto-play controls |
@@ -230,7 +231,7 @@ This tool makes deliberate simplifications for educational clarity. Each simplif
 | Simplification | Detail |
 |---|---|
 | Full-batch gradient descent | Not stochastic or mini-batch |
-| Vanilla SGD | No momentum, no Adam, no weight decay |
+| No weight decay / schedules | Optimizers (SGD, Momentum, RMSProp, Adam) are supported, but there is no weight decay or learning-rate schedule |
 | Fixed output activation | Output is always sigmoid regardless of hidden activations chosen |
 | Binary classification only | Two classes; output is a single sigmoid probability |
 | PyTorch code is explanatory | Generated scripts embed the active dataset's points but reinitialize weights randomly; use the Weights tab to export trained values |

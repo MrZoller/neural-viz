@@ -3,6 +3,7 @@
 // =============================================================================
 import { XOR_DATA } from './datasets.js';
 import { forwardPass, computeLoss, backprop, updateWeights } from './network.js';
+import { optimizerStep } from './optimizers.js';
 
 // -----------------------------------------------------------------------------
 // ONE TRAINING EPOCH (FULL BATCH)
@@ -10,7 +11,7 @@ import { forwardPass, computeLoss, backprop, updateWeights } from './network.js'
 // `dataset` defaults to XOR for backward compatibility, but any list of
 // { input, label } points works.
 // -----------------------------------------------------------------------------
-export function trainOneEpoch(weights, biases, hiddenActivationTypes, lr, dataset = XOR_DATA) {
+export function trainOneEpoch(weights, biases, hiddenActivationTypes, lr, dataset = XOR_DATA, optimizer = null) {
   const L = weights.length;
   const N = dataset.length;
 
@@ -43,9 +44,12 @@ export function trainOneEpoch(weights, biases, hiddenActivationTypes, lr, datase
   const avgDW = totalDW.map(W => W.map(row => row.map(v => v / N)));
   const avgDB = totalDB.map(b => b.map(v => v / N));
 
-  const { weights: newWeights, biases: newBiases } = updateWeights(
-    weights, biases, avgDW, avgDB, lr
-  );
+  // With an optimizer, delegate the update rule (momentum/RMSProp/Adam); the
+  // optimizer carries lr in its config. Without one, fall back to plain SGD so
+  // existing callers (and the default lr argument) behave exactly as before.
+  const { weights: newWeights, biases: newBiases } = optimizer
+    ? optimizerStep(optimizer, weights, biases, avgDW, avgDB)
+    : updateWeights(weights, biases, avgDW, avgDB, lr);
 
   return {
     weights:     newWeights,
