@@ -98,7 +98,7 @@ export function checkConvergence(loss, xorResults, consecutiveCorrect) {
   }
   const allHighConf = xorResults.every(r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE);
   if (allHighConf && consecutiveCorrect >= CONVERGENCE_CONSECUTIVE_EPOCHS) {
-    return { converged: true, reason: `All 4 XOR points correctly classified with >${(CONVERGENCE_CONFIDENCE*100).toFixed(0)}% confidence for ${CONVERGENCE_CONSECUTIVE_EPOCHS} consecutive epochs` };
+    return { converged: true, reason: `All ${xorResults.length} points correctly classified with >${(CONVERGENCE_CONFIDENCE*100).toFixed(0)}% confidence for ${CONVERGENCE_CONSECUTIVE_EPOCHS} consecutive epochs` };
   }
   return { converged: false, reason: '' };
 }

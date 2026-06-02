@@ -16,6 +16,14 @@ No ML libraries. No backend. No mocked values. Every number you see is computed 
 - Activation function per hidden layer: ReLU, Tanh, or Sigmoid
 - Architecture changes reinitialize the network immediately
 
+### Datasets
+
+- **Logical gates**: XOR, AND, OR — the classic 4-point truth tables
+- **Geometric (generated)**: circles, moons, spirals, linear, blobs — all normalized into `[0,1]²`
+- Geometric datasets expose **points**, **noise**, and **seed** controls (seeded so a given configuration is reproducible; ↻ reshuffle bumps the seed)
+- Switching dataset reinitializes the network and re-runs training, the decision boundary, and every panel against the new points
+- Panels adapt to dataset size: per-point tables for the 4-point gates; small dot markers, an accuracy/confidence summary, and dropdown sample pickers for the larger generated sets
+
 ### Training
 
 | Control | Description |
@@ -224,7 +232,8 @@ This tool makes deliberate simplifications for educational clarity. Each simplif
 | Full-batch gradient descent | Not stochastic or mini-batch |
 | Vanilla SGD | No momentum, no Adam, no weight decay |
 | Fixed output activation | Output is always sigmoid regardless of hidden activations chosen |
-| XOR dataset only | 4 fixed training examples |
+| Binary classification only | Two classes; output is a single sigmoid probability |
+| PyTorch export targets XOR | The generated `.py`/`.ipynb` still trains on XOR; a disclaimer shows when another dataset is selected. Dataset-aware export is planned |
 | PyTorch code is explanatory | Generated scripts reinitialize weights randomly; use the Weights tab to export trained values |
 | 2D loss surface would be a slice | The actual loss landscape has as many dimensions as there are parameters |
 

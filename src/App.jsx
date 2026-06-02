@@ -14,7 +14,7 @@
 //   dW[l]     = gradient of loss w.r.t. W[l]
 // =============================================================================
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   ReferenceLine, ReferenceDot,
@@ -29,6 +29,9 @@ import {
 import {
   ACTIVATIONS,
   XOR_DATA,
+  DATASETS,
+  DEFAULT_DATASET_OPTS,
+  makeDataset,
   initNetwork,
   forwardPass,
   computeLoss,
@@ -36,7 +39,7 @@ import {
   updateWeights,
   trainOneEpoch,
   computeDecisionBoundary,
-  evaluateXOR,
+  evaluateDataset,
   checkConvergence,
   computeActivationCurve,
   runGradientCheck,
@@ -663,7 +666,7 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
     {backpropData && (
       <div className="flex items-center gap-1.5 px-1 pt-1 font-mono text-slate-500 flex-wrap"
            style={{ fontSize: '7.5px' }}>
-        <span>Edge color = |∂L/∂w| (absolute magnitude · avg over 4 XOR samples)</span>
+        <span>Edge color = |∂L/∂w| (absolute magnitude · avg over all training samples)</span>
         <div className="flex shrink-0">
           {[0, .17, .33, .5, .67, .83, 1].map((t, i) => (
             <div key={i} style={{ width: 14, height: 8, backgroundColor: gradientColor(t, 1) }} />
@@ -690,12 +693,13 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
 //   Confidence mode: dark=near decision boundary (uncertain), amber=confident
 //   Both use ACTUAL forward passes — nothing is approximated.
 // =============================================================================
-function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes,
+function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes, dataset,
                                    inferencePoint, onClick, showConfidence }) {
   const canvasRef = useRef(null);
   const GRID      = 40;
   const CANVAS_SZ = 260;
   const POINT_R   = 7;
+  const points    = dataset || XOR_DATA;
 
   useEffect(() => {
     if (!weights || !canvasRef.current) return;
@@ -716,16 +720,26 @@ function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes,
     }
 
     ctx.globalAlpha = 1;
-    for (const { input, label } of XOR_DATA) {
+    // Few points (logical gates): large, labelled, ringed dots. Many points
+    // (generated datasets): small unlabelled dots so the boundary stays visible.
+    const dense = points.length > 8;
+    const r     = dense ? 2.5 : POINT_R;
+    for (const { input, label } of points) {
       const cx = input[0] * CANVAS_SZ;
       const cy = (1 - input[1]) * CANVAS_SZ;
-      ctx.beginPath(); ctx.arc(cx, cy, POINT_R+2, 0, Math.PI*2);
-      ctx.strokeStyle = 'white'; ctx.lineWidth = 1.5; ctx.stroke();
-      ctx.beginPath(); ctx.arc(cx, cy, POINT_R, 0, Math.PI*2);
+      if (!dense) {
+        ctx.beginPath(); ctx.arc(cx, cy, r+2, 0, Math.PI*2);
+        ctx.strokeStyle = 'white'; ctx.lineWidth = 1.5; ctx.stroke();
+      }
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2);
       ctx.fillStyle = label === 1 ? '#f97316' : '#3b82f6'; ctx.fill();
-      ctx.fillStyle = 'white'; ctx.font = 'bold 9px monospace';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(label.toString(), cx, cy);
+      if (dense) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 0.5; ctx.stroke();
+      } else {
+        ctx.fillStyle = 'white'; ctx.font = 'bold 9px monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(label.toString(), cx, cy);
+      }
     }
 
     if (inferencePoint) {
@@ -743,7 +757,7 @@ function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes,
     ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
     ctx.fillText('x₁: 0 → 1', CANVAS_SZ/2, CANVAS_SZ-3);
-  }, [weights, biases, hiddenActivationTypes, inferencePoint, showConfidence]);
+  }, [weights, biases, hiddenActivationTypes, inferencePoint, showConfidence, points]);
 
   return (
     <div className="relative">
@@ -759,16 +773,24 @@ function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes,
 // =============================================================================
 // COMPONENT: XorVerifyPanel
 // =============================================================================
-function XorVerifyPanel({ xorResults }) {
+function XorVerifyPanel({ xorResults, datasetSpec }) {
+  const name = datasetSpec?.label || 'XOR';
   if (!xorResults) return (
-    <div className="text-xs text-slate-600 italic px-1">Train to see XOR verification</div>
+    <div className="text-xs text-slate-600 italic px-1">Train to see {name} verification</div>
   );
-  const allCorrect  = xorResults.every(r => r.correct);
+  const total       = xorResults.length;
+  const correctN    = xorResults.filter(r => r.correct).length;
+  const allCorrect  = correctN === total;
   const allHighConf = xorResults.every(r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE);
+  const accuracy    = total ? correctN / total : 0;
+  const meanConf    = total ? xorResults.reduce((s, r) => s + r.confidence, 0) / total : 0;
+  // Large generated datasets: show an accuracy/confidence summary plus a
+  // scrollable per-point table rather than an unreadable wall of rows.
+  const dense = total > 8;
   return (
     <div>
       <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">XOR Verify</span>
+        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">{name} Verify</span>
         {allCorrect && (
           <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${allHighConf ? 'bg-emerald-900/60 text-emerald-400' : 'bg-blue-900/60 text-blue-400'}`}>
             {allHighConf ? '✓ Solved' : '✓ Correct'}
@@ -776,36 +798,52 @@ function XorVerifyPanel({ xorResults }) {
         )}
         {!allCorrect && (
           <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/40 text-red-400">
-            {xorResults.filter(r => r.correct).length}/4 correct
+            {correctN}/{total} correct
           </span>
         )}
       </div>
-      <table className="w-full text-xs font-mono border-collapse">
-        <thead>
-          <tr className="text-slate-600">
-            <th className="text-left pb-1">Input</th>
-            <th className="text-center pb-1">Exp</th>
-            <th className="text-right pb-1">p(1)</th>
-            <th className="text-center pb-1">→</th>
-            <th className="text-right pb-1">Conf</th>
-            <th className="text-center pb-1 w-4">✓</th>
-          </tr>
-        </thead>
-        <tbody>
-          {xorResults.map((r, i) => (
-            <tr key={i} className={`border-t border-slate-800 ${r.correct ? 'text-slate-300' : 'text-red-400'}`}>
-              <td className="py-0.5 pr-1">[{r.input.join(',')}]</td>
-              <td className="text-center">{r.label}</td>
-              <td className="text-right">{r.rawOutput.toFixed(3)}</td>
-              <td className="text-center text-slate-500">→</td>
-              <td className={`text-right ${r.confidence > CONVERGENCE_CONFIDENCE ? 'text-emerald-400' : r.confidence > 0.7 ? 'text-amber-400' : 'text-red-400'}`}>
-                {(r.confidence * 100).toFixed(0)}%
-              </td>
-              <td className="text-center">{r.correct ? '✓' : '✗'}</td>
+      {dense && (
+        <div className="flex gap-2 mb-2 text-xs">
+          <div className="flex-1 bg-slate-800/60 rounded px-2 py-1">
+            <div className="text-slate-500">Accuracy</div>
+            <div className={`font-mono font-bold ${accuracy === 1 ? 'text-emerald-400' : accuracy > 0.9 ? 'text-amber-400' : 'text-red-400'}`}>
+              {(accuracy * 100).toFixed(1)}% <span className="text-slate-600 font-normal">({correctN}/{total})</span>
+            </div>
+          </div>
+          <div className="flex-1 bg-slate-800/60 rounded px-2 py-1">
+            <div className="text-slate-500">Mean conf</div>
+            <div className="font-mono font-bold text-slate-300">{(meanConf * 100).toFixed(0)}%</div>
+          </div>
+        </div>
+      )}
+      <div className={dense ? 'max-h-40 overflow-y-auto' : ''}>
+        <table className="w-full text-xs font-mono border-collapse">
+          <thead>
+            <tr className="text-slate-600">
+              <th className="text-left pb-1">Input</th>
+              <th className="text-center pb-1">Exp</th>
+              <th className="text-right pb-1">p(1)</th>
+              <th className="text-center pb-1">→</th>
+              <th className="text-right pb-1">Conf</th>
+              <th className="text-center pb-1 w-4">✓</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {xorResults.map((r, i) => (
+              <tr key={i} className={`border-t border-slate-800 ${r.correct ? 'text-slate-300' : 'text-red-400'}`}>
+                <td className="py-0.5 pr-1">[{r.input.map(v => Number.isInteger(v) ? v : v.toFixed(2)).join(',')}]</td>
+                <td className="text-center">{r.label}</td>
+                <td className="text-right">{r.rawOutput.toFixed(3)}</td>
+                <td className="text-center text-slate-500">→</td>
+                <td className={`text-right ${r.confidence > CONVERGENCE_CONFIDENCE ? 'text-emerald-400' : r.confidence > 0.7 ? 'text-amber-400' : 'text-red-400'}`}>
+                  {(r.confidence * 100).toFixed(0)}%
+                </td>
+                <td className="text-center">{r.correct ? '✓' : '✗'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -813,35 +851,49 @@ function XorVerifyPanel({ xorResults }) {
 // =============================================================================
 // COMPONENT: MathAuditPanel
 // =============================================================================
-function MathAuditPanel({ xorResults, hiddenActivationTypes, layerSizes }) {
+function MathAuditPanel({ xorResults, hiddenActivationTypes, layerSizes, dataset }) {
   const [selectedIdx, setSelectedIdx] = useState(0);
   if (!xorResults) return (
     <div className="text-xs text-slate-600 italic">Train to see forward-pass audit</div>
   );
 
-  const r = xorResults[selectedIdx];
+  const points = dataset || XOR_DATA;
+  const fmt    = inp => inp.map(v => Number.isInteger(v) ? v : v.toFixed(2)).join(',');
+  // selectedIdx can be stale after a dataset switch; clamp into range.
+  const idx = Math.min(selectedIdx, xorResults.length - 1);
+  const r = xorResults[idx];
   const { activations, preActivations, input, label, rawOutput, sampleLoss } = r;
+  const dense = points.length > 8;
 
   return (
     <div>
       <div className="flex items-center gap-2 mb-2">
         <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Math Audit</span>
-        <div className="flex gap-1">
-          {XOR_DATA.map((d, i) => (
-            <button key={i} onClick={() => setSelectedIdx(i)}
-              className={`text-xs px-1.5 py-0.5 rounded font-mono transition-colors ${
-                i === selectedIdx ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-              }`}>
-              [{d.input.join(',')}]
-            </button>
-          ))}
-        </div>
+        {dense ? (
+          <select value={idx} onChange={e => setSelectedIdx(+e.target.value)}
+            className="text-xs bg-slate-800 text-slate-300 rounded px-1.5 py-0.5 font-mono border border-slate-700">
+            {points.map((d, i) => (
+              <option key={i} value={i}>#{i} [{fmt(d.input)}] y={d.label}</option>
+            ))}
+          </select>
+        ) : (
+          <div className="flex gap-1">
+            {points.map((d, i) => (
+              <button key={i} onClick={() => setSelectedIdx(i)}
+                className={`text-xs px-1.5 py-0.5 rounded font-mono transition-colors ${
+                  i === idx ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                }`}>
+                [{fmt(d.input)}]
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="text-xs font-mono space-y-1.5 bg-slate-900/60 rounded p-2">
         <div className="text-slate-400">
           <span className="text-slate-500">Input  </span>
-          x = [{input.join(', ')}]
+          x = [{input.map(v => Number.isInteger(v) ? v : v.toFixed(3)).join(', ')}]
           <span className="text-slate-600 ml-1">(label={label})</span>
         </div>
 
@@ -883,7 +935,7 @@ function MathAuditPanel({ xorResults, hiddenActivationTypes, layerSizes }) {
 // Shows both values side by side with the absolute and relative error so the
 // user can see for themselves that the math is correct.
 // =============================================================================
-function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGradients }) {
+function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGradients, dataset }) {
   const [layerIdx, setLayerIdx] = useState(0);
   const [rowIdx,   setRowIdx]   = useState(0);
   const [colIdx,   setColIdx]   = useState(0);
@@ -931,7 +983,7 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGr
   const handleRun = () => {
     const r = runGradientCheck(
       network.weights, network.biases, hiddenActivationTypes,
-      layerIdx, safeRow, safeCol
+      layerIdx, safeRow, safeCol, 1e-4, dataset
     );
     setResult(r);
   };
@@ -1005,7 +1057,7 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGr
         <div className="text-xs font-mono bg-slate-900/60 rounded p-2 space-y-1">
           {/* Intermediate loss values so the user can see the raw computation */}
           <div className="text-slate-500 border-b border-slate-800 pb-1 mb-1">
-            ε = {result.epsilon}  ·  full-batch (N = 4 XOR samples)
+            ε = {result.epsilon}  ·  full-batch (N = {(dataset || XOR_DATA).length} samples)
           </div>
           <div className="flex justify-between">
             <span className="text-slate-500">Loss(w + ε)</span>
@@ -1067,7 +1119,7 @@ function GradientCheckPanel({ network, hiddenActivationTypes, layerSizes, lastGr
 // The trace below shows per-sample values for the selected input, with a
 // comparison to the batch-average gradient that actually drives training.
 // =============================================================================
-function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradients }) {
+function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, dataset, lastGradients }) {
   const [selLayer,  setSelLayer]  = useState(0);
   const [selOutN,   setSelOutN]   = useState(0);
   const [selInN,    setSelInN]    = useState(0);
@@ -1081,14 +1133,16 @@ function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradi
     );
   }
 
+  const points  = dataset || XOR_DATA;
   const L       = network.weights.length;
   const safeL   = Math.min(selLayer, L - 1);
   const safeJ   = Math.min(selOutN, layerSizes[safeL + 1] - 1);
   const safeK   = Math.min(selInN,  layerSizes[safeL]     - 1);
 
-  // Re-run forward + backprop on the selected XOR sample to get per-sample deltas.
+  // Re-run forward + backprop on the selected sample to get per-sample deltas.
   // backprop() returns deltas[] where deltas[l+1][j] = ∂L/∂z_j for layer l+1.
-  const sample = XOR_DATA[selSample];
+  const safeSample = Math.min(selSample, points.length - 1);
+  const sample = points[safeSample];
   const { activations, preActivations } = forwardPass(
     sample.input, network.weights, network.biases, hiddenActivationTypes
   );
@@ -1163,13 +1217,21 @@ function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradi
           ))}
         </div>
 
-        {/* XOR sample picker */}
+        {/* Input sample picker — buttons for small datasets, dropdown for large */}
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-slate-600" style={{ fontSize: '8px' }}>Input sample:</span>
-          {XOR_DATA.map((s, i) => (
+          {points.length > 8 ? (
+            <select value={safeSample} onChange={e => setSelSample(+e.target.value)}
+              className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-slate-200 font-mono"
+              style={{ fontSize: '9px' }}>
+              {points.map((s, i) => (
+                <option key={i} value={i}>#{i} [{s.input.map(v => Number.isInteger(v) ? v : v.toFixed(2)).join(',')}]→{s.label}</option>
+              ))}
+            </select>
+          ) : points.map((s, i) => (
             <button key={i} onClick={() => setSelSample(i)}
               className={`px-1.5 py-0.5 rounded font-mono border transition-colors ${
-                selSample === i
+                safeSample === i
                   ? 'bg-blue-900/50 text-blue-300 border-blue-700'
                   : 'bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300'
               }`} style={{ fontSize: '9px' }}>
@@ -1324,7 +1386,7 @@ function ChainRuleTracer({ network, layerSizes, hiddenActivationTypes, lastGradi
 // Shows: f(z) curve, f′(z) derivative curve, tangent line at current z,
 // vertical marker at current z, and numeric readout.
 // =============================================================================
-function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastForwardData }) {
+function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, dataset, lastForwardData }) {
   const [selLayer,  setSelLayer]  = useState(1);
   const [selNeuron, setSelNeuron] = useState(0);
   const [selSample, setSelSample] = useState(0);
@@ -1338,6 +1400,7 @@ function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastFo
     );
   }
 
+  const points    = dataset || XOR_DATA;
   const numLayers = layerSizes.length;   // includes input layer
   const safeLayer = Math.max(1, Math.min(selLayer, numLayers - 1));
   const safeN     = Math.min(selNeuron, layerSizes[safeLayer] - 1);
@@ -1347,7 +1410,8 @@ function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastFo
   const actLabel  = ACTIVATIONS[actType].label;
 
   // Compute actual z and activation values for the selected sample
-  const sample = XOR_DATA[selSample];
+  const safeSample = Math.min(selSample, points.length - 1);
+  const sample = points[safeSample];
   const { activations: sActs, preActivations: sPre } = forwardPass(
     sample.input, network.weights, network.biases, hiddenActivationTypes
   );
@@ -1392,10 +1456,18 @@ function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastFo
 
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-slate-600" style={{ fontSize: '8px' }}>Input:</span>
-          {XOR_DATA.map((s, i) => (
+          {points.length > 8 ? (
+            <select value={safeSample} onChange={e => setSelSample(+e.target.value)}
+              className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-slate-200 font-mono"
+              style={{ fontSize: '9px' }}>
+              {points.map((s, i) => (
+                <option key={i} value={i}>#{i} [{s.input.map(v => Number.isInteger(v) ? v : v.toFixed(2)).join(',')}]</option>
+              ))}
+            </select>
+          ) : points.map((s, i) => (
             <button key={i} onClick={() => setSelSample(i)}
               className={`px-1.5 py-0.5 rounded font-mono border transition-colors ${
-                selSample === i
+                safeSample === i
                   ? 'bg-blue-900/50 text-blue-300 border-blue-700'
                   : 'bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300'
               }`} style={{ fontSize: '9px' }}>
@@ -1559,7 +1631,7 @@ function ActivationExplorer({ network, layerSizes, hiddenActivationTypes, lastFo
 // =============================================================================
 // COMPONENT: CalcPanel  (Phase 3 Calculus Panel)
 // =============================================================================
-function CalcPanel({ network, layerSizes, hiddenActivationTypes, lastGradients, lastForwardData }) {
+function CalcPanel({ network, layerSizes, hiddenActivationTypes, dataset, lastGradients, lastForwardData }) {
   const [section, setSection] = useState('chain');
 
   return (
@@ -1586,6 +1658,7 @@ function CalcPanel({ network, layerSizes, hiddenActivationTypes, lastGradients, 
           network={network}
           layerSizes={layerSizes}
           hiddenActivationTypes={hiddenActivationTypes}
+          dataset={dataset}
           lastGradients={lastGradients}
         />
       )}
@@ -1594,6 +1667,7 @@ function CalcPanel({ network, layerSizes, hiddenActivationTypes, lastGradients, 
           network={network}
           layerSizes={layerSizes}
           hiddenActivationTypes={hiddenActivationTypes}
+          dataset={dataset}
           lastForwardData={lastForwardData}
         />
       )}
@@ -1681,7 +1755,7 @@ function WeightsInspector({ network, layerSizes, hiddenActivationTypes, epoch, t
       convergenceReasons.includes('xor_verified')
     ) {
       trainingObj.note =
-        `Converged via XOR confidence criterion (all 4 points correct with >${(CONVERGENCE_CONFIDENCE*100).toFixed(0)}% confidence ` +
+        `Converged via confidence criterion (all ${(xorResults?.length ?? 4)} points correct with >${(CONVERGENCE_CONFIDENCE*100).toFixed(0)}% confidence ` +
         `for ${CONVERGENCE_CONSECUTIVE_EPOCHS} consecutive epochs). Loss ${latestLoss.toFixed(5)} is above the ` +
         `${CONVERGENCE_LOSS_THRESHOLD} threshold — that is expected for this convergence path.`;
     }
@@ -2014,8 +2088,8 @@ function ConceptCallout({ type, onDismiss, trainingStatus, hiddenActivationTypes
       pytorch: '# Adam adapts the learning rate per weight — more robust than SGD:\noptimizer = torch.optim.Adam(model.parameters(), lr=0.01)',
     },
     converged: {
-      title: 'XOR Solved ✓', color: 'border-emerald-500', icon: '✓',
-      body: 'The network correctly classifies all 4 XOR points with high confidence. Training stopped automatically. You can click anywhere on the boundary canvas to test inference.',
+      title: 'Solved ✓', color: 'border-emerald-500', icon: '✓',
+      body: 'The network correctly classifies all training points with high confidence. Training stopped automatically. You can click anywhere on the boundary canvas to test inference.',
       pytorch: `model.eval()\nwith torch.no_grad():\n    pred = model(test_input)`,
     },
     vanishingGradient: {
@@ -2061,9 +2135,10 @@ function ConceptCallout({ type, onDismiss, trainingStatus, hiddenActivationTypes
 // Weights are NOT exported — the generated code reinitializes randomly.
 // A note in the UI and the exported files makes this explicit.
 // =============================================================================
-function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate }) {
+function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, datasetId }) {
   const [codeExpanded, setCodeExpanded] = useState(false);
   const [copyDone,     setCopyDone]     = useState(false);
+  const isXor = datasetId === 'xor';
 
   const paramCount = layerSizes.slice(0, -1).reduce(
     (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
@@ -2152,6 +2227,16 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate }) {
         </div>
       </div>
 
+      {/* Non-XOR disclaimer — the exported script still trains on XOR */}
+      {!isXor && (
+        <div className="mx-3 mb-2 px-2 py-1.5 rounded bg-amber-900/20 border border-amber-800/40 text-amber-300/90"
+          style={{ fontSize: '10px', lineHeight: 1.35 }}>
+          ⚠ The exported PyTorch script/notebook still trains on <span className="font-mono">XOR</span>.
+          Dataset-aware export for <span className="font-mono">{DATASETS[datasetId]?.label || datasetId}</span> is
+          coming; the architecture/optimizer summary above is accurate for your current setup.
+        </div>
+      )}
+
       {/* Export buttons */}
       <div className="flex gap-1.5 px-3 pb-2.5">
         <button onClick={handleCopyScript}
@@ -2195,6 +2280,18 @@ export default function App() {
   const [numHiddenLayers, setNumHiddenLayers] = useState(2);
   const [neuronsPerLayer, setNeuronsPerLayer]  = useState([4, 4]);
   const [activationTypes, setActivationTypes]  = useState(['relu', 'relu']);
+
+  // ── Dataset ────────────────────────────────────────────────────────────────
+  // The selected dataset id plus generation options for the geometric sets.
+  // `dataset` is the concrete list of { input, label } points everything trains
+  // on, visualizes, and audits. Logical gates ignore points/noise/seed.
+  const [datasetId,   setDatasetId]   = useState('xor');
+  const [datasetOpts, setDatasetOpts] = useState(DEFAULT_DATASET_OPTS);
+  const datasetSpec = DATASETS[datasetId] || DATASETS.xor;
+  const dataset = useMemo(
+    () => makeDataset(datasetId, datasetOpts),
+    [datasetId, datasetOpts.points, datasetOpts.noise, datasetOpts.seed]
+  );
 
   // ── Network weights ────────────────────────────────────────────────────────
   const [network, setNetwork] = useState(null);
@@ -2306,10 +2403,12 @@ export default function App() {
 
   const prevArchRef = useRef(null);
   useEffect(() => {
-    const key = layerSizes.join(',') + '|' + activationTypes.join(',');
+    const key = layerSizes.join(',') + '|' + activationTypes.join(',') + '|' + datasetId
+      + '|' + datasetOpts.points + ',' + datasetOpts.noise + ',' + datasetOpts.seed;
     if (prevArchRef.current !== null && prevArchRef.current !== key) initializeNetwork();
     prevArchRef.current = key;
-  }, [layerSizes.join(','), activationTypes.join(',')]);
+  }, [layerSizes.join(','), activationTypes.join(','), datasetId,
+      datasetOpts.points, datasetOpts.noise, datasetOpts.seed]);
 
   // ── Architecture handlers ──────────────────────────────────────────────────
   const handleNumHiddenLayersChange = (n) => {
@@ -2333,7 +2432,7 @@ export default function App() {
     }
 
     const { weights, biases } = networkRef.current;
-    const result = trainOneEpoch(weights, biases, activationTypes, learningRate);
+    const result = trainOneEpoch(weights, biases, activationTypes, learningRate, dataset);
 
     networkRef.current = { weights: result.weights, biases: result.biases };
     setNetwork({ weights: result.weights, biases: result.biases });
@@ -2357,7 +2456,7 @@ export default function App() {
     }
     setEpochsSinceImprovement(epochsSinceImprovRef.current);
 
-    const xorEval = evaluateXOR(result.weights, result.biases, activationTypes);
+    const xorEval = evaluateDataset(result.weights, result.biases, activationTypes, dataset);
     setXorResults(xorEval);
 
     const allHighConf = xorEval.every(r => r.correct && r.confidence > CONVERGENCE_CONFIDENCE);
@@ -2406,7 +2505,7 @@ export default function App() {
     }
 
     return { shouldStop: false };
-  }, [activationTypes, learningRate]);
+  }, [activationTypes, learningRate, dataset]);
 
   // ── RAF training loop ──────────────────────────────────────────────────────
   const STEPS_PER_FRAME = 5;
@@ -2461,7 +2560,7 @@ export default function App() {
     if (!networkRef.current || isTraining || isAnimatingRef.current) return;
     isAnimatingRef.current = true;
     const { weights, biases } = networkRef.current;
-    const input = XOR_DATA[0].input;
+    const input = (dataset[0] || XOR_DATA[0]).input;
     const { activations, preActivations } = forwardPass(input, weights, biases, activationTypes);
     if (!dismissedCalloutsRef.current.has('firstForward')) {
       setCallouts(prev => new Set([...prev, 'firstForward']));
@@ -2475,7 +2574,7 @@ export default function App() {
     setForwardPassDisplay({ activations, preActivations });
     setLastForwardData({ activations, preActivations });
     isAnimatingRef.current = false;
-  }, [activationTypes, layerSizes.length, isTraining]);
+  }, [activationTypes, layerSizes.length, isTraining, dataset]);
 
   // ── Explained epoch — user-paced 4-stage mode ────────────────────────────
   // startExplainedEpoch pre-computes one training epoch and enters step mode.
@@ -2496,7 +2595,7 @@ export default function App() {
     if (!networkRef.current || isTraining || isAnimatingRef.current) return;
     if (stepModeStage !== 'idle') return;
     const { weights, biases } = networkRef.current;
-    const result = trainOneEpoch(weights, biases, activationTypes, learningRate);
+    const result = trainOneEpoch(weights, biases, activationTypes, learningRate, dataset);
     stepModeAppliedRef.current = false;
     setStepModeResult(result);
     setStepModeLoss(result.loss);
@@ -2504,7 +2603,7 @@ export default function App() {
     setStepModeLayerAnimDone(false);
     setStepModeStage('forward');
     setTrainingStatus('stepping');
-  }, [activationTypes, learningRate, isTraining, stepModeStage]);
+  }, [activationTypes, learningRate, isTraining, stepModeStage, dataset]);
 
   // Per-stage layer animation: fires on every stage transition.
   // Uses a cancellation token so navigating away stops the in-flight animation.
@@ -2572,8 +2671,8 @@ export default function App() {
           }
           setEpochsSinceImprovement(epochsSinceImprovRef.current);
 
-          const xorEval = evaluateXOR(
-            stepModeResult.weights, stepModeResult.biases, activationTypes
+          const xorEval = evaluateDataset(
+            stepModeResult.weights, stepModeResult.biases, activationTypes, dataset
           );
           setXorResults(xorEval);
 
@@ -2632,7 +2731,7 @@ export default function App() {
     };
   // stepModeAppliedRef is a ref — intentionally omitted from deps
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stepModeStage, stepModeResult]);
+  }, [stepModeStage, stepModeResult, dataset]);
 
   // Navigation handlers — defined before auto-play effect so Next can reference Done
   const handleExplainedDone = useCallback(() => {
@@ -2764,6 +2863,50 @@ export default function App() {
             LEFT PANEL — Architecture + Training Controls
         ═══════════════════════════════════════════════════════════════════ */}
         <div className="w-52 border-r border-slate-700 p-3 flex flex-col gap-3 overflow-y-auto flex-shrink-0">
+          {/* Dataset */}
+          <section>
+            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Dataset</h2>
+            <select value={datasetId} onChange={e => setDatasetId(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-600 rounded text-xs text-white p-1 mb-1.5">
+              <optgroup label="Logical (4 points)">
+                {Object.values(DATASETS).filter(d => d.kind === 'logical').map(d => (
+                  <option key={d.id} value={d.id}>{d.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Geometric (generated)">
+                {Object.values(DATASETS).filter(d => d.kind === 'geometric').map(d => (
+                  <option key={d.id} value={d.id}>{d.label}</option>
+                ))}
+              </optgroup>
+            </select>
+            <p className="text-slate-500 mb-1.5" style={{ fontSize: '10px', lineHeight: 1.3 }}>
+              {datasetSpec.description}
+            </p>
+            {datasetSpec.kind === 'geometric' && (
+              <div className="pl-2 border-l-2 border-slate-700 space-y-1.5">
+                <label className="block">
+                  <span className="text-slate-500" style={{ fontSize: '10px' }}>Points: {datasetOpts.points}</span>
+                  <input type="range" min="20" max="300" step="20" value={datasetOpts.points}
+                    onChange={e => setDatasetOpts(o => ({ ...o, points: +e.target.value }))}
+                    className="w-full accent-emerald-500" />
+                </label>
+                <label className="block">
+                  <span className="text-slate-500" style={{ fontSize: '10px' }}>Noise: {datasetOpts.noise.toFixed(2)}</span>
+                  <input type="range" min="0" max="0.12" step="0.01" value={datasetOpts.noise}
+                    onChange={e => setDatasetOpts(o => ({ ...o, noise: +e.target.value }))}
+                    className="w-full accent-emerald-500" />
+                </label>
+                <div className="flex items-center gap-1">
+                  <span className="text-slate-500 flex-1" style={{ fontSize: '10px' }}>Seed: {datasetOpts.seed}</span>
+                  <button onClick={() => setDatasetOpts(o => ({ ...o, seed: o.seed + 1 }))}
+                    className="text-xs px-1.5 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">
+                    ↻ reshuffle
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+
           {/* Architecture */}
           <section>
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Architecture</h2>
@@ -2938,7 +3081,7 @@ export default function App() {
                 {stepModeStage === 'loss' && (
                   <div>
                     <div className={`font-bold ${col.title} mb-0.5`}>📊 Loss Calculation</div>
-                    <div className="text-slate-300">Binary Cross-Entropy penalizes wrong-confident predictions harshly. Lower = better fit to all 4 XOR samples.</div>
+                    <div className="text-slate-300">Binary Cross-Entropy penalizes wrong-confident predictions harshly. Lower = better fit to the training samples.</div>
                     <div className="mt-1 font-mono text-amber-400">
                       L = −(1/4)·Σ[y·log(ŷ)+(1−y)·log(1−ŷ)] = <span className="text-amber-200 font-bold">{stepModeLoss?.toFixed(6)}</span>
                     </div>
@@ -3057,6 +3200,7 @@ export default function App() {
                   weights={network.weights}
                   biases={network.biases}
                   hiddenActivationTypes={activationTypes}
+                  dataset={dataset}
                   inferencePoint={inferencePoint}
                   onClick={handleCanvasClick}
                   showConfidence={showConfidence}
@@ -3136,11 +3280,12 @@ export default function App() {
             layerSizes={layerSizes}
             hiddenActivationTypes={activationTypes}
             learningRate={learningRate}
+            datasetId={datasetId}
           />
 
           <div className="flex-shrink-0 p-3 border-b border-slate-700">
             <div className="bg-slate-800/40 rounded-lg border border-slate-700 p-2.5">
-              <XorVerifyPanel xorResults={xorResults} />
+              <XorVerifyPanel xorResults={xorResults} datasetSpec={datasetSpec} />
             </div>
           </div>
 
@@ -3183,6 +3328,7 @@ export default function App() {
                   network={network}
                   layerSizes={layerSizes}
                   hiddenActivationTypes={activationTypes}
+                  dataset={dataset}
                   lastGradients={lastGradients}
                   lastForwardData={lastForwardData}
                 />
@@ -3194,6 +3340,7 @@ export default function App() {
                       xorResults={xorResults}
                       hiddenActivationTypes={activationTypes}
                       layerSizes={layerSizes}
+                      dataset={dataset}
                     />
                   ) : (
                     <GradientCheckPanel
@@ -3201,6 +3348,7 @@ export default function App() {
                       hiddenActivationTypes={activationTypes}
                       layerSizes={layerSizes}
                       lastGradients={lastGradients}
+                      dataset={dataset}
                     />
                   )}
                 </div>

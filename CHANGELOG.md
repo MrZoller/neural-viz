@@ -12,11 +12,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Math core extracted from `App.jsx` into `src/nn/`** — activation functions, network (init/forward/loss/backprop/update/decision boundary), training/evaluation/convergence, and the finite-difference gradient check now live in dedicated, React-free modules (`activations.js`, `datasets.js`, `network.js`, `training.js`) re-exported through `src/nn/index.js`. Behaviour is unchanged; `App.jsx` imports the same functions it previously defined inline.
 
 ### Added
+- **Dataset picker** — choose between logical gates (XOR/AND/OR) and generated geometric datasets (circles, moons, spirals, linear, blobs) from the left panel. Geometric sets expose points / noise / seed controls (with a ↻ reshuffle button). Selecting a dataset reinitializes the network and re-runs all training, the decision boundary, and the calculus/audit panels against it. The boundary canvas, verify, audit, ∂w-trace and f(z) panels adapt to large datasets (small dot markers, accuracy/confidence summary, dropdown sample pickers) while keeping the exact per-point tables for the 4-point logical gates. The PyTorch export currently still targets XOR and shows a disclaimer for other datasets (dataset-aware export to follow).
 - **Unit test suite (Vitest)** — 47 tests covering the math core. `npm test` runs them. The centrepiece checks backpropagation against a symmetric finite-difference estimate, fuzzing across 40 random architectures and activation combinations to assert <1e-4 relative gradient error — the same correctness guarantee the UI's ∂w Check tab demonstrates. The fuzz loop is now fully seeded (deterministic, never flaky) and uses smooth activations; ReLU is verified separately with explicit filtering of the `f′(0)=0` kink cases the centered finite-difference cannot model.
 - **Dataset generators** (`src/nn/datasets.js`) — logical gates (XOR/AND/OR) plus seeded geometric datasets (circles, moons, spirals, linear, blobs), all normalized into `[0,1]²` so the existing decision-boundary and forward-pass visualizations work unchanged. A `mulberry32` PRNG makes generated datasets deterministic per (points, noise, seed). The math core (`trainOneEpoch`, `evaluateDataset`, `runGradientCheck`) is now parameterized by dataset, defaulting to XOR for backward compatibility. _(UI dataset picker still to come.)_
 - **Continuous integration** — GitHub Actions workflow (`.github/workflows/ci.yml`) runs `npm ci`, `npm test`, and `npm run build` on every pull request and on pushes to `main`.
 
 ### Planned
+- Dataset-aware PyTorch export: embed the active dataset's points so the generated script/notebook trains on what's shown
+- Click-to-draw datasets: place class-0/class-1 points directly on the boundary canvas and train on them
+- Optimizers: momentum / RMSProp / Adam with a side-by-side loss-curve comparison
 - Gradient flow summary: per-layer average/max/min gradient magnitudes, dead-ReLU count, vanishing-gradient flag
 - Loss surface viewer: 2D slice over two selected weights with current-position marker
 - Test batch panel: add multiple test points, view predicted class and confidence table
