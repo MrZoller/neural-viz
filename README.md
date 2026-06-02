@@ -2,7 +2,9 @@
 
 **Make the math visible.**
 
-An interactive, browser-based neural-network visualizer. Build and train a multilayer perceptron on XOR, watch activations propagate forward, inspect gradients flowing back, trace the chain rule step-by-step, and explore activation functions — all backed by real mathematics implemented in plain JavaScript.
+**[Live demo → https://mrzoller.github.io/neural-viz/](https://mrzoller.github.io/neural-viz/)**
+
+An interactive, browser-based neural-network visualizer. Train multilayer perceptrons on eight datasets (XOR through spirals), choose from four optimizers, step through the chain rule one term at a time, inspect the loss surface, verify gradients numerically, and export your model to PyTorch — all backed by real mathematics implemented in plain JavaScript.
 
 No ML libraries. No backend. No mocked values. Every number you see is computed from first principles.
 
@@ -209,11 +211,11 @@ generators and the SVG colour/layout helpers.
 ### Tests
 
 ```bash
-npm test          # run the Vitest suite once
+npm test          # run the Vitest suite once (69 tests)
 npm run test:watch
 ```
 
-The suite (37 tests) covers the math core directly. Its centrepiece verifies
+The suite (69 tests) covers the math core directly. Its centrepiece verifies
 backpropagation against a symmetric finite-difference estimate — the same check
 exposed in the UI's **∂w Check** tab — fuzzing across 40 randomly generated
 architectures and activation combinations to assert that every analytical
