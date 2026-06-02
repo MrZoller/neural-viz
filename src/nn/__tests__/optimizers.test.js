@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { OPTIMIZERS, createOptimizer, cloneOptimizer, optimizerStep } from '../optimizers.js';
 import { initNetwork } from '../network.js';
 import { makeDataset } from '../datasets.js';
-import { trainOneEpoch } from '../training.js';
+import { trainOneEpoch, runOptimizerComparison } from '../training.js';
 
 const net = () => ({ weights: [[[0.5, -0.5]]], biases: [[0.1]] });
 
@@ -149,5 +149,27 @@ describe('trainOneEpoch with an optimizer', () => {
     const sgdLoss  = run('sgd',  0.05, 400);
     expect(adamLoss).toBeLessThan(0.05);     // Adam converges quickly
     expect(adamLoss).toBeLessThan(sgdLoss);  // and beats plain SGD at equal lr/epochs
+  });
+});
+
+describe('runOptimizerComparison', () => {
+  it('returns one fixed-length loss curve per optimizer from a shared start', () => {
+    const net = initNetwork([2, 5, 1]);
+    const data = makeDataset('xor');
+    const types = ['sgd', 'momentum', 'rmsprop', 'adam'];
+    const results = runOptimizerComparison(net, ['tanh'], data, types, 0.05, 120);
+    expect(results.map(r => r.type)).toEqual(types);
+    for (const r of results) {
+      expect(r.losses).toHaveLength(120);
+      expect(r.finalLoss).toBe(r.losses[119]);
+      expect(Number.isFinite(r.finalLoss)).toBe(true);
+    }
+  });
+
+  it('does not mutate the starting network (each run is independent)', () => {
+    const net = initNetwork([2, 4, 1]);
+    const before = JSON.stringify(net.weights);
+    runOptimizerComparison(net, ['relu'], makeDataset('xor'), ['sgd', 'adam'], 0.1, 50);
+    expect(JSON.stringify(net.weights)).toBe(before);
   });
 });

@@ -16,6 +16,7 @@ export {
 } from './network.js';
 export {
   trainOneEpoch,
+  runOptimizerComparison,
   evaluateXOR,
   evaluateDataset,
   checkConvergence,

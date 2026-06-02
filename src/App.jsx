@@ -41,6 +41,7 @@ import {
   backprop,
   updateWeights,
   trainOneEpoch,
+  runOptimizerComparison,
   computeDecisionBoundary,
   evaluateDataset,
   checkConvergence,
@@ -2382,6 +2383,9 @@ export default function App() {
   // ── Inference ─────────────────────────────────────────────────────────────
   const [inferencePoint, setInferencePoint] = useState(null);
 
+  // ── Optimizer comparison overlay ────────────────────────────────────────────
+  const [compareData, setCompareData] = useState(null); // { rows, epochs, lr } | null
+
   // ── Concept callouts ───────────────────────────────────────────────────────
   const [callouts,          setCallouts]         = useState(new Set());
   const [dismissedCallouts, setDismissedCallouts] = useState(new Set());
@@ -2622,6 +2626,26 @@ export default function App() {
   };
 
   const handleReset = () => { initializeNetwork(); };
+
+  // Run all four optimizers from one shared fresh init and overlay their loss
+  // curves. Pure + synchronous (small net, capped epochs) — see runOptimizerComparison.
+  const COMPARE_OPTS   = ['sgd', 'momentum', 'rmsprop', 'adam'];
+  const COMPARE_EPOCHS = 300;
+  const OPT_COLORS     = { sgd: '#60a5fa', momentum: '#a78bfa', rmsprop: '#f59e0b', adam: '#34d399' };
+  const handleCompareOptimizers = () => {
+    const net = initNetwork(layerSizes);
+    const series = runOptimizerComparison(
+      net, activationTypes, dataset, COMPARE_OPTS, learningRate, COMPARE_EPOCHS
+    );
+    // Pivot into Recharts rows: { epoch, sgd, momentum, rmsprop, adam }
+    const rows = Array.from({ length: COMPARE_EPOCHS }, (_, e) => {
+      const row = { epoch: e + 1 };
+      for (const s of series) row[s.type] = s.losses[e];
+      return row;
+    });
+    const finals = Object.fromEntries(series.map(s => [s.type, s.finalLoss]));
+    setCompareData({ rows, finals, epochs: COMPARE_EPOCHS, lr: learningRate });
+  };
 
   // ── Forward-pass animation (standalone) ───────────────────────────────────
   const runForwardPassAnimation = useCallback(async () => {
@@ -3078,6 +3102,10 @@ export default function App() {
                 className="w-full py-1 rounded text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-40">
                 Forward Pass ▶
               </button>
+              <button onClick={handleCompareOptimizers} disabled={isBusy}
+                className="w-full py-1 rounded text-xs bg-slate-800 hover:bg-emerald-900/40 text-emerald-300/90 border border-slate-700 disabled:opacity-40">
+                ⚖ Compare Optimizers
+              </button>
               <button onClick={handleReset}
                 className="w-full py-1 rounded text-xs bg-slate-800 hover:bg-red-900/50 text-slate-400 hover:text-red-300 border border-slate-700">
                 Reset
@@ -3464,6 +3492,57 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {/* ── Optimizer comparison overlay ─────────────────────────────────────── */}
+      {compareData && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"
+          onClick={() => setCompareData(null)}>
+          <div className="bg-slate-900 border border-slate-700 rounded-lg shadow-2xl w-full max-w-3xl p-4"
+            onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-sm font-bold text-white">Optimizer comparison</h3>
+              <button onClick={() => setCompareData(null)}
+                className="text-slate-500 hover:text-slate-200 text-lg leading-none">×</button>
+            </div>
+            <p className="text-xs text-slate-500 mb-3">
+              All four optimizers trained from the <span className="text-slate-300">same</span> fresh
+              initialization on <span className="text-slate-300">{datasetSpec.label}</span> ·
+              arch {layerSizes.join('→')} · lr {compareData.lr.toFixed(3)} · {compareData.epochs} epochs.
+              BCE loss (lower = better).
+            </p>
+            <div style={{ width: '100%', height: 280 }}>
+              <ResponsiveContainer>
+                <LineChart data={compareData.rows} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+                  <CartesianGrid stroke="#1e293b" />
+                  <XAxis dataKey="epoch" stroke="#64748b" tick={{ fontSize: 10 }}
+                    label={{ value: 'epoch', position: 'insideBottom', offset: -2, fill: '#64748b', fontSize: 10 }} />
+                  <YAxis stroke="#64748b" tick={{ fontSize: 10 }} width={44} domain={[0, 'auto']} />
+                  <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', fontSize: 11 }}
+                    formatter={(v, n) => [v.toFixed(4), OPTIMIZERS[n]?.label || n]} />
+                  {COMPARE_OPTS.map(type => (
+                    <Line key={type} type="monotone" dataKey={type} stroke={OPT_COLORS[type]}
+                      dot={false} strokeWidth={1.6} isAnimationActive={false} />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex flex-wrap gap-3 mt-2 text-xs">
+              {COMPARE_OPTS.map(type => (
+                <div key={type} className="flex items-center gap-1.5">
+                  <span className="inline-block w-3 h-0.5 rounded" style={{ background: OPT_COLORS[type] }} />
+                  <span className="text-slate-300">{OPTIMIZERS[type].label}</span>
+                  <span className="text-slate-500 font-mono">
+                    {compareData.finals[type] != null ? compareData.finals[type].toFixed(4) : '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="text-slate-600 mt-2" style={{ fontSize: '10px' }}>
+              This run does not change your current network — it trains throwaway copies just for the chart.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

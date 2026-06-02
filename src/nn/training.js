@@ -3,7 +3,7 @@
 // =============================================================================
 import { XOR_DATA } from './datasets.js';
 import { forwardPass, computeLoss, backprop, updateWeights } from './network.js';
-import { optimizerStep } from './optimizers.js';
+import { optimizerStep, createOptimizer } from './optimizers.js';
 
 // -----------------------------------------------------------------------------
 // ONE TRAINING EPOCH (FULL BATCH)
@@ -59,6 +59,30 @@ export function trainOneEpoch(weights, biases, hiddenActivationTypes, lr, datase
     avgDB,
     allForwardData,
   };
+}
+
+// -----------------------------------------------------------------------------
+// OPTIMIZER COMPARISON
+// Train one fresh copy of the SAME starting network with each optimizer for a
+// fixed number of epochs, recording the loss curve of each. Because every run
+// shares the identical initial weights, dataset, architecture and learning
+// rate, the only variable is the update rule — so the overlaid curves are a
+// fair head-to-head ("watch Adam escape the plateau SGD gets stuck on").
+// -----------------------------------------------------------------------------
+export function runOptimizerComparison(net, hiddenActivationTypes, dataset, optimizerTypes, lr, epochs) {
+  return optimizerTypes.map(type => {
+    let weights = structuredClone(net.weights);
+    let biases  = structuredClone(net.biases);
+    const opt = createOptimizer(type, lr, { weights, biases });
+    const losses = [];
+    for (let e = 0; e < epochs; e++) {
+      const r = trainOneEpoch(weights, biases, hiddenActivationTypes, lr, dataset, opt);
+      weights = r.weights;
+      biases  = r.biases;
+      losses.push(r.loss);
+    }
+    return { type, losses, finalLoss: losses.length ? losses[losses.length - 1] : null };
+  });
 }
 
 // -----------------------------------------------------------------------------
