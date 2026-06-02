@@ -7,10 +7,12 @@ import { forwardPass, computeLoss, backprop, updateWeights } from './network.js'
 // -----------------------------------------------------------------------------
 // ONE TRAINING EPOCH (FULL BATCH)
 // Forward → accumulate gradients → average → update weights.
+// `dataset` defaults to XOR for backward compatibility, but any list of
+// { input, label } points works.
 // -----------------------------------------------------------------------------
-export function trainOneEpoch(weights, biases, hiddenActivationTypes, lr) {
+export function trainOneEpoch(weights, biases, hiddenActivationTypes, lr, dataset = XOR_DATA) {
   const L = weights.length;
-  const N = XOR_DATA.length;
+  const N = dataset.length;
 
   const totalDW = weights.map(W => W.map(row => row.map(() => 0)));
   const totalDB = weights.map(W => new Array(W.length).fill(0));
@@ -19,7 +21,7 @@ export function trainOneEpoch(weights, biases, hiddenActivationTypes, lr) {
   const allTargets     = [];
   const allForwardData = [];
 
-  for (const { input, label } of XOR_DATA) {
+  for (const { input, label } of dataset) {
     const { activations, preActivations } = forwardPass(
       input, weights, biases, hiddenActivationTypes
     );
@@ -56,11 +58,12 @@ export function trainOneEpoch(weights, biases, hiddenActivationTypes, lr) {
 }
 
 // -----------------------------------------------------------------------------
-// XOR EVALUATION
+// DATASET EVALUATION
+// Per-point forward pass with predicted class, confidence and sample loss.
 // -----------------------------------------------------------------------------
-export function evaluateXOR(weights, biases, hiddenActivationTypes) {
+export function evaluateDataset(weights, biases, hiddenActivationTypes, dataset = XOR_DATA) {
   const L = weights.length;
-  return XOR_DATA.map(({ input, label }) => {
+  return dataset.map(({ input, label }) => {
     const { activations, preActivations } = forwardPass(
       input, weights, biases, hiddenActivationTypes
     );
@@ -75,6 +78,9 @@ export function evaluateXOR(weights, biases, hiddenActivationTypes) {
              activations, preActivations };
   });
 }
+
+// Backward-compatible alias — XOR is just the default dataset.
+export const evaluateXOR = evaluateDataset;
 
 // -----------------------------------------------------------------------------
 // CONVERGENCE / STOP CONDITIONS
@@ -119,15 +125,15 @@ export function checkConvergence(loss, xorResults, consecutiveCorrect) {
 //
 // PyTorch equivalent: torch.autograd.gradcheck(model, inputs, eps=1e-4)
 // -----------------------------------------------------------------------------
-export function runGradientCheck(weights, biases, hiddenActivationTypes, l, j, k, epsilon = 1e-4) {
-  const N = XOR_DATA.length;
+export function runGradientCheck(weights, biases, hiddenActivationTypes, l, j, k, epsilon = 1e-4, dataset = XOR_DATA) {
+  const N = dataset.length;
   const L = weights.length;
 
-  // ① Analytical gradient — backprop averaged over all 4 XOR samples.
+  // ① Analytical gradient — backprop averaged over all samples in the dataset.
   //    This is the exact same computation used during training; we're just
   //    isolating one scalar entry dWeights[l][j][k].
   let totalDW = 0;
-  for (const { input, label } of XOR_DATA) {
+  for (const { input, label } of dataset) {
     const { activations, preActivations } = forwardPass(
       input, weights, biases, hiddenActivationTypes
     );
@@ -147,11 +153,11 @@ export function runGradientCheck(weights, biases, hiddenActivationTypes, l, j, k
     );
 
   const evalLoss = (perturbedWeights) => {
-    const preds = XOR_DATA.map(({ input }) => {
+    const preds = dataset.map(({ input }) => {
       const { activations } = forwardPass(input, perturbedWeights, biases, hiddenActivationTypes);
       return activations[L];
     });
-    return computeLoss(preds, XOR_DATA.map(d => d.label));
+    return computeLoss(preds, dataset.map(d => d.label));
   };
 
   const lossPlus  = evalLoss(perturbed(+1));

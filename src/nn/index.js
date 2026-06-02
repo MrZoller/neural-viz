@@ -4,7 +4,7 @@
 // No ML libraries; see individual modules for the math conventions.
 // =============================================================================
 export { ACTIVATIONS, computeActivationCurve } from './activations.js';
-export { XOR_DATA } from './datasets.js';
+export { XOR_DATA, DATASETS, DEFAULT_DATASET_OPTS, makeDataset } from './datasets.js';
 export {
   initNetwork,
   forwardPass,
@@ -16,6 +16,7 @@ export {
 export {
   trainOneEpoch,
   evaluateXOR,
+  evaluateDataset,
   checkConvergence,
   runGradientCheck,
   CONVERGENCE_LOSS_THRESHOLD,
