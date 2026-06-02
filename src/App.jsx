@@ -56,6 +56,7 @@ import {
   MIN_IMPROVEMENT,
   PLATEAU_MIN_LOSS,
 } from './nn/index.js';
+import { LESSONS } from './lessons.js';
 
 // =============================================================================
 // SECTION 10 — PYTORCH CODE GENERATOR
@@ -2486,6 +2487,87 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, optimiz
 }
 
 // =============================================================================
+// COMPONENT: LessonsPanel
+//
+// Non-modal guided-tour player. Shows a menu of lessons, then steps through one
+// — applying each step's setup is handled by the parent (see applyLessonSetup).
+// Stays out of the way so the user can still drive the real controls.
+// =============================================================================
+
+// Minimal **bold** renderer for lesson body text.
+function renderLessonBody(text) {
+  return text.split('**').map((part, i) =>
+    i % 2 === 1 ? <strong key={i} className="text-slate-100 font-semibold">{part}</strong> : part
+  );
+}
+
+function LessonsPanel({ lessonIdx, stepIdx, onPick, onPrev, onNext, onExitToMenu, onClose }) {
+  // Lesson menu
+  if (lessonIdx === null) {
+    return (
+      <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-40 w-[440px] max-w-[94vw] bg-slate-900/95 border border-indigo-700/60 rounded-lg shadow-2xl backdrop-blur p-3">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-bold text-white">📚 Guided lessons</span>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-lg leading-none">×</button>
+        </div>
+        <div className="space-y-1.5">
+          {LESSONS.map((lesson, i) => (
+            <button key={lesson.id} onClick={() => onPick(i)}
+              className="w-full text-left px-2.5 py-1.5 rounded bg-slate-800/70 hover:bg-slate-700 border border-slate-700 transition-colors">
+              <div className="text-xs font-semibold text-indigo-300">{lesson.title}</div>
+              <div className="text-slate-400" style={{ fontSize: '11px' }}>{lesson.summary}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const lesson = LESSONS[lessonIdx];
+  const step   = lesson.steps[stepIdx];
+  const last   = stepIdx === lesson.steps.length - 1;
+
+  return (
+    <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-40 w-[440px] max-w-[94vw] bg-slate-900/95 border border-indigo-700/60 rounded-lg shadow-2xl backdrop-blur p-3">
+      <div className="flex items-center justify-between mb-1">
+        <button onClick={onExitToMenu} className="text-indigo-300 hover:text-indigo-200" style={{ fontSize: '11px' }}>
+          ‹ {lesson.title}
+        </button>
+        <div className="flex items-center gap-2">
+          <span className="text-slate-500" style={{ fontSize: '10px' }}>Step {stepIdx + 1}/{lesson.steps.length}</span>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-lg leading-none">×</button>
+        </div>
+      </div>
+      <div className="text-sm font-bold text-white mb-1">{step.title}</div>
+      <p className="text-xs text-slate-300 leading-relaxed mb-3">{renderLessonBody(step.body)}</p>
+      <div className="flex items-center gap-2">
+        <button onClick={onPrev} disabled={stepIdx === 0}
+          className="px-2.5 py-1 rounded text-xs bg-slate-800 text-slate-300 border border-slate-700 disabled:opacity-40 hover:bg-slate-700">
+          ‹ Prev
+        </button>
+        {last ? (
+          <button onClick={onExitToMenu}
+            className="px-2.5 py-1 rounded text-xs bg-indigo-700 hover:bg-indigo-600 text-white border border-indigo-500">
+            Finish ✓
+          </button>
+        ) : (
+          <button onClick={onNext}
+            className="px-2.5 py-1 rounded text-xs bg-indigo-700 hover:bg-indigo-600 text-white border border-indigo-500">
+            Next ›
+          </button>
+        )}
+        <div className="flex-1" />
+        <div className="flex gap-1">
+          {lesson.steps.map((_, i) => (
+            <span key={i} className={`inline-block w-1.5 h-1.5 rounded-full ${i === stepIdx ? 'bg-indigo-400' : 'bg-slate-700'}`} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
 // MAIN APP COMPONENT
 // =============================================================================
 export default function App() {
@@ -2552,6 +2634,11 @@ export default function App() {
 
   // ── Optimizer comparison overlay ────────────────────────────────────────────
   const [compareData, setCompareData] = useState(null); // { rows, epochs, lr } | null
+
+  // ── Guided lessons ──────────────────────────────────────────────────────────
+  const [lessonsOpen, setLessonsOpen] = useState(false);
+  const [lessonIdx,   setLessonIdx]   = useState(null); // null = lesson menu
+  const [lessonStep,  setLessonStep]  = useState(0);
 
   // ── Concept callouts ───────────────────────────────────────────────────────
   const [callouts,          setCallouts]         = useState(new Set());
@@ -2813,6 +2900,40 @@ export default function App() {
     const finals = Object.fromEntries(series.map(s => [s.type, s.finalLoss]));
     setCompareData({ rows, finals, epochs: COMPARE_EPOCHS, lr: learningRate });
   };
+
+  // ── Guided lessons ──────────────────────────────────────────────────────────
+  // Apply a lesson step's declarative setup to the real controls. Setting the
+  // architecture/dataset reuses the normal reset path, so each configured step
+  // starts from a fresh, consistent network.
+  const applyLessonSetup = (setup) => {
+    if (!setup) return;
+    if (setup.datasetId) setDatasetId(setup.datasetId);
+    if (setup.neuronsPerLayer) {
+      setNumHiddenLayers(setup.neuronsPerLayer.length);
+      setNeuronsPerLayer(setup.neuronsPerLayer.slice());
+    }
+    if (setup.activations) setActivationTypes(setup.activations.slice());
+    if (setup.optimizer) setOptimizerType(setup.optimizer);
+    if (setup.lr != null) setLearningRate(setup.lr);
+    if (setup.rightPanelTab) setRightPanelTab(setup.rightPanelTab);
+    if (setup.openCompare) handleCompareOptimizers();
+  };
+
+  // Apply the current step's setup whenever the active lesson/step changes.
+  useEffect(() => {
+    if (lessonsOpen && lessonIdx !== null) {
+      applyLessonSetup(LESSONS[lessonIdx].steps[lessonStep]?.setup);
+    }
+    // applyLessonSetup only reads stable setters; intentionally keyed on position
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lessonsOpen, lessonIdx, lessonStep]);
+
+  const openLessons     = () => { setLessonIdx(null); setLessonStep(0); setLessonsOpen(true); };
+  const pickLesson      = (i) => { setLessonStep(0); setLessonIdx(i); };
+  const lessonNext      = () => setLessonStep(s => Math.min(s + 1, LESSONS[lessonIdx].steps.length - 1));
+  const lessonPrev      = () => setLessonStep(s => Math.max(s - 1, 0));
+  const lessonToMenu    = () => { setLessonIdx(null); setLessonStep(0); };
+  const closeLessons    = () => setLessonsOpen(false);
 
   // ── Forward-pass animation (standalone) ───────────────────────────────────
   const runForwardPassAnimation = useCallback(async () => {
@@ -3105,8 +3226,16 @@ export default function App() {
           <h1 className="text-base font-bold text-white leading-tight">Neural Net Playground</h1>
           <p className="text-xs text-slate-500">Make the math visible.</p>
         </div>
-        <div className="text-xs text-slate-500 font-mono">
-          {layerSizes.join(' → ')}
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-500 font-mono">{layerSizes.join(' → ')}</span>
+          <button onClick={openLessons}
+            className={`text-xs px-2.5 py-1 rounded border transition-colors ${
+              lessonsOpen
+                ? 'bg-indigo-700 text-white border-indigo-500'
+                : 'bg-slate-800 text-indigo-300 border-slate-700 hover:bg-slate-700'
+            }`}>
+            📚 Lessons
+          </button>
         </div>
       </header>
 
@@ -3672,6 +3801,19 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {/* ── Guided lessons player ────────────────────────────────────────────── */}
+      {lessonsOpen && (
+        <LessonsPanel
+          lessonIdx={lessonIdx}
+          stepIdx={lessonStep}
+          onPick={pickLesson}
+          onPrev={lessonPrev}
+          onNext={lessonNext}
+          onExitToMenu={lessonToMenu}
+          onClose={closeLessons}
+        />
+      )}
 
       {/* ── Optimizer comparison overlay ─────────────────────────────────────── */}
       {compareData && (

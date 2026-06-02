@@ -24,6 +24,17 @@ No ML libraries. No backend. No mocked values. Every number you see is computed 
 - Switching dataset reinitializes the network and re-runs training, the decision boundary, and every panel against the new points
 - Panels adapt to dataset size: per-point tables for the 4-point gates; small dot markers, an accuracy/confidence summary, and dropdown sample pickers for the larger generated sets
 
+### Guided lessons
+
+A **📚 Lessons** launcher (header) opens a non-modal tour player. Each lesson configures the playground for you (dataset, architecture, optimizer, learning rate, active panel) and walks you through a concept while you drive the real controls:
+
+- **Solving XOR** — why a hidden layer is needed; watch the boundary bend
+- **Capacity & dead ReLU** — how too few ReLU neurons stall, and why width helps
+- **Optimizers race** — on Spirals, see Adam/Momentum outpace plain SGD
+- **The loss landscape** — read a 2-D loss-surface slice and trace a descent path
+
+Lesson content lives in `src/lessons.js` and is validated by tests.
+
 ### Training
 
 | Control | Description |
@@ -163,7 +174,8 @@ neural-viz/
 │   │   ├── network.js     # initNetwork, forwardPass, loss, backprop, update, boundary
 │   │   ├── training.js    # trainOneEpoch, evaluateXOR, convergence, gradient check
 │   │   ├── index.js       # Public surface (barrel) imported by App.jsx
-│   │   └── __tests__/     # Vitest suites (activations, network, training)
+│   │   └── __tests__/     # Vitest suites (activations, network, training, optimizers, surface)
+│   ├── lessons.js         # Guided-lesson content (data) + its test in src/__tests__
 │   ├── App.jsx            # All UI components — imports the math from src/nn
 │   ├── main.jsx           # React root mount
 │   └── index.css          # Tailwind directives + minimal animation helpers
