@@ -610,9 +610,14 @@ function NetworkGraph({ layerSizes, hiddenActivationTypes, forwardData, backprop
             const isActive = animatingLayer >= 0 &&
               (li === animatingLayer - 1 || li === animatingLayer);
 
-            if (backpropData?.dWeights[li]) {
+            // Guard the full index path: right after an architecture change the
+            // new (larger) layout can transiently render against stale, smaller
+            // gradient data before initializeNetwork() clears it. Optional-chain
+            // so a shape mismatch falls back to a plain edge instead of throwing.
+            const gradEntry = backpropData?.dWeights?.[li]?.[ti]?.[fi];
+            if (gradEntry !== undefined) {
               // Color edges by gradient magnitude
-              const m = Math.abs(backpropData.dWeights[li][ti][fi]);
+              const m = Math.abs(gradEntry);
               stroke = gradientColor(m, maxGradMag);
               sw = 1 + 2 * (m / (maxGradMag || 1));
               // During backward animation: violet highlight for the active layer

@@ -34,7 +34,7 @@ No ML libraries. No backend. No mocked values. Every number you see is computed 
 | **Explained Step** | 4-stage interactive walkthrough: Forward → Loss → Backward → Update, with Next / Prev / Auto-play controls |
 | **Reset** | Reinitialize with new random weights |
 
-Convergence auto-stops when loss drops below 0.001, or when all 4 XOR points are correctly classified with >95% confidence for 50 consecutive epochs. A plateau detector fires when improvement stalls.
+Convergence auto-stops when loss drops below 0.001, or when every point in the active dataset is correctly classified with >95% confidence for 50 consecutive epochs. A plateau detector fires when improvement stalls.
 
 ### Visualization
 
@@ -142,7 +142,7 @@ computeDecisionBoundary()   40×40 forward passes over [0,1]² input space
 
 **Why XOR?** XOR is not linearly separable, so a single-layer network cannot solve it. This makes it the minimal demonstration of why hidden layers and nonlinear activations exist.
 
-**Why full-batch gradient descent?** Simpler to understand for educational purposes. With only 4 training examples, mini-batching would add noise without benefit.
+**Why full-batch gradient descent?** Simpler to understand for educational purposes — every epoch is one clean pass over the whole dataset, which keeps the loss curve and the Explained Step walkthrough easy to follow. (For the 4-point logical gates, mini-batching would add noise without benefit; the generated datasets are still small enough that full batch is fine.)
 
 **Why BCE + sigmoid on the output?** Binary Cross-Entropy paired with a sigmoid output has a numerically convenient combined gradient: `∂L/∂z_output = ŷ − y`. The sigmoid derivative cancels algebraically, avoiding the saturation problem at the output layer.
 
@@ -182,9 +182,11 @@ and tested on its own. Nothing in `src/nn/` imports React.
 | Module | Contents |
 |---|---|
 | `activations.js` | Activation functions (ReLU, Tanh, Sigmoid) with exact derivatives; activation-curve generator for the calculus panel |
-| `datasets.js` | XOR dataset |
+| `datasets.js` | Dataset registry — logical gates (XOR/AND/OR) and seeded geometric generators (circles, moons, spirals, linear, blobs) |
 | `network.js` | Network initialization (Xavier / Glorot), forward pass, BCE loss, backpropagation, gradient-descent update, decision-boundary computation |
-| `training.js` | One full-batch training epoch, XOR evaluation, convergence / stop conditions, finite-difference gradient check |
+| `optimizers.js` | SGD, Momentum, RMSProp, Adam — buffers + update rules matching PyTorch |
+| `training.js` | One full-batch training epoch (optimizer-aware), dataset evaluation, optimizer comparison, convergence / stop conditions, finite-difference gradient check |
+| `surface.js` | 2-D loss-surface slice over two weights, and the descent-path tracer |
 
 `App.jsx` holds the React components (in order of declaration: `NetworkGraph`,
 `DecisionBoundaryCanvas`, `ConceptCallout`, `XorVerifyPanel`, `MathAuditPanel`,
