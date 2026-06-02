@@ -54,8 +54,28 @@ import {
 // =============================================================================
 // SECTION 10 — PYTORCH CODE GENERATOR
 // =============================================================================
-function generatePyTorchCode(layerSizes, hiddenActivationTypes) {
+
+// Format a dataset's points as Python tensor literals so the exported code
+// trains on exactly what the UI shows. Small datasets (logical gates) stay on
+// one line; generated datasets are written one point per line.
+function datasetToPython(dataset) {
+  const fmt = v => Number.isInteger(v) ? `${v}` : `${+v.toFixed(4)}`;
+  if (dataset.length <= 8) {
+    return {
+      X: '[' + dataset.map(d => `[${d.input.map(fmt).join(', ')}]`).join(', ') + ']',
+      y: '[' + dataset.map(d => `[${d.label}]`).join(', ') + ']',
+    };
+  }
+  return {
+    X: '[\n' + dataset.map(d => `    [${d.input.map(fmt).join(', ')}],`).join('\n') + '\n]',
+    y: '[\n' + dataset.map(d => `    [${d.label}],`).join('\n') + '\n]',
+  };
+}
+
+function generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec) {
   const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
+  const pts  = datasetToPython(dataset);
+  const name = datasetSpec?.label || 'dataset';
   let layers = '';
   layers += `    nn.Linear(${layerSizes[0]}, ${layerSizes[1]}),  # W: [${layerSizes[1]}×${layerSizes[0]}]\n`;
   layers += `    ${actMap[hiddenActivationTypes[0]] || 'nn.ReLU()'},\n`;
@@ -69,7 +89,7 @@ function generatePyTorchCode(layerSizes, hiddenActivationTypes) {
 
   return `import torch, torch.nn as nn
 
-# Architecture: ${layerSizes.join(' → ')} → 1
+# Architecture: ${layerSizes.join(' → ')}
 model = nn.Sequential(
 ${layers})
 
@@ -77,10 +97,9 @@ criterion = nn.BCELoss()
 optimizer = torch.optim.SGD(
     model.parameters(), lr=0.1)
 
-X = torch.tensor(
-    [[0,0],[0,1],[1,0],[1,1]], dtype=torch.float)
-y = torch.tensor(
-    [[0],[1],[1],[0]],         dtype=torch.float)
+# Dataset: ${name} (${dataset.length} points, from the playground)
+X = torch.tensor(${pts.X}, dtype=torch.float)
+y = torch.tensor(${pts.y}, dtype=torch.float)
 
 for epoch in range(max_epochs):
     optimizer.zero_grad()    # clear ∂L/∂W
@@ -102,8 +121,11 @@ for epoch in range(max_epochs):
 // randomly. The architecture and hyper-parameters do match the current UI.
 // =============================================================================
 
-function generateFullScript(layerSizes, hiddenActivationTypes, learningRate) {
+function generateFullScript(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec) {
   const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
+  const pts  = datasetToPython(dataset);
+  const name = datasetSpec?.label || 'Dataset';
+  const desc = datasetSpec?.description || '';
   const paramCount = layerSizes.slice(0, -1).reduce(
     (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
   );
@@ -119,14 +141,15 @@ function generateFullScript(layerSizes, hiddenActivationTypes, learningRate) {
 
   return `#!/usr/bin/env python3
 """
-XOR Neural Network — exported from Neural Net Playground
+${name} Neural Network — exported from Neural Net Playground
 Architecture : ${layerSizes.slice(0, -1).join(' -> ')} -> 1
 Activations  : ${hiddenActivationTypes.join(', ')} + Sigmoid (output)
 Parameters   : ${paramCount}
 Learning rate: ${learningRate}
+Dataset      : ${name} (${dataset.length} points)
 
 Note: weights are randomly re-initialized, not copied from the simulator.
-      Re-run until convergence — this architecture reliably solves XOR.
+      The dataset points below are exactly the ones shown in the playground.
 """
 import torch
 import torch.nn as nn
@@ -135,9 +158,10 @@ import matplotlib.pyplot as plt
 torch.manual_seed(42)  # remove for random init each run
 
 # -- Dataset ------------------------------------------------------------------
-# XOR: output is 1 iff exactly one input is 1 (not linearly separable).
-X = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=torch.float)
-y = torch.tensor([[0],    [1],    [1],    [0]],     dtype=torch.float)
+# ${desc}
+X = torch.tensor(${pts.X}, dtype=torch.float)
+y = torch.tensor(${pts.y}, dtype=torch.float)
+print(f"Dataset: {X.shape[0]} points")
 
 # -- Model --------------------------------------------------------------------
 # nn.Linear(in, out) creates weight matrix W [out x in] and bias b [out].
@@ -158,7 +182,7 @@ losses = []
 for epoch in range(10_000):
     optimizer.zero_grad()        # clear accumulated gradients
     out  = model(X)              # forward pass (activations left -> right)
-    loss = criterion(out, y)     # BCE loss over all 4 XOR samples
+    loss = criterion(out, y)     # BCE loss over all samples
     loss.backward()              # backprop: dL/dW via chain rule
     optimizer.step()             # W <- W - lr * dL/dW
     losses.append(loss.item())
@@ -172,17 +196,17 @@ else:
 plt.figure(figsize=(8, 3))
 plt.plot(losses, lw=1, color="#60a5fa", label="BCE Loss")
 plt.axhline(0.001, color="#10b981", ls="--", lw=1, label="convergence (0.001)")
-plt.xlabel("Epoch"); plt.ylabel("BCE Loss"); plt.title("XOR Training Loss")
+plt.xlabel("Epoch"); plt.ylabel("BCE Loss"); plt.title("${name} Training Loss")
 plt.legend(); plt.tight_layout(); plt.show()
 
-# -- XOR verification ---------------------------------------------------------
+# -- Verification -------------------------------------------------------------
 # model.eval() disables training-only layers (none here, but good practice).
 # torch.no_grad() skips gradient tracking during inference.
 model.eval()
 with torch.no_grad():
     preds = model(X)
 
-print("\\nXOR Verification:")
+print("\\n${name} Verification:")
 print(f"{'Input':<12} {'Expected':<10} {'p(class=1)':<14} {'Class':<8} Correct?")
 print("-" * 55)
 all_correct = True
@@ -227,8 +251,12 @@ print(f"\\nInference: {test_pt.tolist()[0]} -> p(1)={prob:.4f}, "
 // Generates an .ipynb JSON that Jupyter can open directly.
 // Architecture, activations, and learning rate match the current UI state.
 // Each cell's source is an array of line-strings as the nbformat v4 spec requires.
-function generateNotebook(layerSizes, hiddenActivationTypes, learningRate) {
+function generateNotebook(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec) {
   const actMap = { relu: 'nn.ReLU()', tanh: 'nn.Tanh()', sigmoid: 'nn.Sigmoid()' };
+  const pts     = datasetToPython(dataset);
+  const name    = datasetSpec?.label || 'Dataset';
+  const desc    = datasetSpec?.description || '';
+  const isLogical = datasetSpec?.kind === 'logical';
   const paramCount = layerSizes.slice(0, -1).reduce(
     (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
   );
@@ -266,15 +294,17 @@ function generateNotebook(layerSizes, hiddenActivationTypes, learningRate) {
       language_info: { name: 'python', version: '3.9.0' },
     },
     cells: [
-      md(`# XOR Neural Network — Neural Net Playground Export
+      md(`# ${name} Neural Network — Neural Net Playground Export
 
 This notebook was exported from **Neural Net Playground** — an interactive MLP
-simulator that trains on XOR using real backpropagation (no ML libraries).
+simulator that trains on the **${name}** dataset using real backpropagation
+(no ML libraries).
 
 ## Configuration
 
 | Property | Value |
 |----------|-------|
+| Dataset | ${name} (${dataset.length} points) |
 | Architecture | ${archStr} |
 | Hidden activations | ${actStr} |
 | Output activation | Sigmoid |
@@ -283,7 +313,7 @@ simulator that trains on XOR using real backpropagation (no ML libraries).
 | Total parameters | ${paramCount} |
 
 > **Note:** Weights are randomly re-initialized here, not copied from the simulator.
-> Re-run cells until convergence — this architecture reliably solves XOR.`),
+> The dataset points are exactly the ones shown in the playground.`),
 
       code(`import torch
 import torch.nn as nn
@@ -292,20 +322,19 @@ import matplotlib.pyplot as plt
 torch.manual_seed(42)  # remove for random init each run
 print("PyTorch:", torch.__version__)`),
 
-      md(`## 1 · XOR Dataset
+      md(`## 1 · ${name} Dataset
 
-XOR outputs **1** iff exactly one input is 1. It is *not linearly separable* —
-a single-layer perceptron cannot solve it, but a two-layer MLP can.
+${desc}${isLogical ? `
 
 | x₁ | x₂ | y |
 |:--:|:--:|:-:|
-| 0  | 0  | 0 |
-| 0  | 1  | 1 |
-| 1  | 0  | 1 |
-| 1  | 1  | 0 |`),
+${dataset.map(d => `| ${d.input[0]}  | ${d.input[1]}  | ${d.label} |`).join('\n')}` : `
 
-      code(`X = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=torch.float)
-y = torch.tensor([[0],    [1],    [1],    [0]],     dtype=torch.float)
+The ${dataset.length} points below live in [0, 1]² — exactly the data shown on
+the decision-boundary canvas.`}`),
+
+      code(`X = torch.tensor(${pts.X}, dtype=torch.float)
+y = torch.tensor(${pts.y}, dtype=torch.float)
 print("X:", X.shape, " y:", y.shape)`),
 
       md(`## 2 · Model Definition
@@ -338,8 +367,8 @@ print(optimizer)`),
 
       md(`## 4 · Training Loop
 
-Each epoch is a full pass over all 4 XOR samples. The five lines map directly
-to the **Explained Step** mode in the simulator:
+Each epoch is a full pass over all ${dataset.length} samples. The five lines map
+directly to the **Explained Step** mode in the simulator:
 
 | Step | Code | Simulator stage |
 |------|------|-----------------|
@@ -353,7 +382,7 @@ to the **Explained Step** mode in the simulator:
 for epoch in range(10_000):
     optimizer.zero_grad()        # clear accumulated gradients
     out  = model(X)              # forward pass: activations left -> right
-    loss = criterion(out, y)     # BCE loss over all 4 samples
+    loss = criterion(out, y)     # BCE loss over all samples
     loss.backward()              # backprop: dL/dW via chain rule
     optimizer.step()             # W <- W - lr * dL/dW
     losses.append(loss.item())
@@ -372,10 +401,10 @@ to **Tanh** activations, or using **Adam** (lr=0.01).`),
       code(`fig, ax = plt.subplots(figsize=(8, 3))
 ax.plot(losses, lw=1, color="#60a5fa", label="BCE Loss")
 ax.axhline(0.001, color="#10b981", ls="--", lw=1, label="convergence (0.001)")
-ax.set_xlabel("Epoch"); ax.set_ylabel("BCE Loss"); ax.set_title("XOR Training Loss")
+ax.set_xlabel("Epoch"); ax.set_ylabel("BCE Loss"); ax.set_title("${name} Training Loss")
 ax.legend(); plt.tight_layout(); plt.show()`),
 
-      md(`## 6 · XOR Verification
+      md(`## 6 · Verification
 
 Inference best practice:
 - \`model.eval()\` — disables dropout / batch-norm (none here, good habit)
@@ -2135,10 +2164,9 @@ function ConceptCallout({ type, onDismiss, trainingStatus, hiddenActivationTypes
 // Weights are NOT exported — the generated code reinitializes randomly.
 // A note in the UI and the exported files makes this explicit.
 // =============================================================================
-function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, datasetId }) {
+function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, datasetId, dataset, datasetSpec }) {
   const [codeExpanded, setCodeExpanded] = useState(false);
   const [copyDone,     setCopyDone]     = useState(false);
-  const isXor = datasetId === 'xor';
 
   const paramCount = layerSizes.slice(0, -1).reduce(
     (s, n, i) => s + n * layerSizes[i + 1] + layerSizes[i + 1], 0
@@ -2146,7 +2174,7 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, dataset
   const actLabels = hiddenActivationTypes.map(t => ACTIVATIONS[t]?.label || t).join(', ');
 
   const handleCopyScript = () => {
-    const script = generateFullScript(layerSizes, hiddenActivationTypes, learningRate);
+    const script = generateFullScript(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec);
     const write = () => {
       if (navigator.clipboard?.writeText) {
         navigator.clipboard.writeText(script).catch(fallback);
@@ -2165,11 +2193,11 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, dataset
   };
 
   const handleExportNotebook = () => {
-    const nb   = generateNotebook(layerSizes, hiddenActivationTypes, learningRate);
+    const nb   = generateNotebook(layerSizes, hiddenActivationTypes, learningRate, dataset, datasetSpec);
     const blob = new Blob([JSON.stringify(nb, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
-    a.href = url; a.download = 'neural-viz-xor.ipynb'; a.click();
+    a.href = url; a.download = `neural-viz-${datasetId}.ipynb`; a.click();
     URL.revokeObjectURL(url);
   };
 
@@ -2227,13 +2255,13 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, dataset
         </div>
       </div>
 
-      {/* Non-XOR disclaimer — the exported script still trains on XOR */}
-      {!isXor && (
-        <div className="mx-3 mb-2 px-2 py-1.5 rounded bg-amber-900/20 border border-amber-800/40 text-amber-300/90"
+      {/* The exported script/notebook trains on the active dataset's points.
+          Weights are still randomly re-initialized (noted in the files). */}
+      {datasetSpec?.kind === 'geometric' && (
+        <div className="mx-3 mb-2 px-2 py-1.5 rounded bg-slate-800/60 border border-slate-700 text-slate-400"
           style={{ fontSize: '10px', lineHeight: 1.35 }}>
-          ⚠ The exported PyTorch script/notebook still trains on <span className="font-mono">XOR</span>.
-          Dataset-aware export for <span className="font-mono">{DATASETS[datasetId]?.label || datasetId}</span> is
-          coming; the architecture/optimizer summary above is accurate for your current setup.
+          Export embeds the {dataset.length} <span className="font-mono">{datasetSpec.label}</span> points shown
+          on the canvas. Weights are re-initialized randomly — re-run until trained.
         </div>
       )}
 
@@ -2264,7 +2292,7 @@ function PyTorchPanel({ layerSizes, hiddenActivationTypes, learningRate, dataset
         <div className="bg-gray-950 border-t border-slate-800 overflow-y-auto"
              style={{ maxHeight: '220px' }}>
           <pre className="text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap p-3">
-            {generatePyTorchCode(layerSizes, hiddenActivationTypes)}
+            {generatePyTorchCode(layerSizes, hiddenActivationTypes, dataset, datasetSpec)}
           </pre>
         </div>
       )}
@@ -3281,6 +3309,8 @@ export default function App() {
             hiddenActivationTypes={activationTypes}
             learningRate={learningRate}
             datasetId={datasetId}
+            dataset={dataset}
+            datasetSpec={datasetSpec}
           />
 
           <div className="flex-shrink-0 p-3 border-b border-slate-700">

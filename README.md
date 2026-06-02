@@ -233,8 +233,7 @@ This tool makes deliberate simplifications for educational clarity. Each simplif
 | Vanilla SGD | No momentum, no Adam, no weight decay |
 | Fixed output activation | Output is always sigmoid regardless of hidden activations chosen |
 | Binary classification only | Two classes; output is a single sigmoid probability |
-| PyTorch export targets XOR | The generated `.py`/`.ipynb` still trains on XOR; a disclaimer shows when another dataset is selected. Dataset-aware export is planned |
-| PyTorch code is explanatory | Generated scripts reinitialize weights randomly; use the Weights tab to export trained values |
+| PyTorch code is explanatory | Generated scripts embed the active dataset's points but reinitialize weights randomly; use the Weights tab to export trained values |
 | 2D loss surface would be a slice | The actual loss landscape has as many dimensions as there are parameters |
 
 ---
