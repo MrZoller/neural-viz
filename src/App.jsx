@@ -3227,7 +3227,15 @@ export default function App() {
           <p className="text-xs text-slate-500">Make the math visible.</p>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-slate-500 font-mono">{layerSizes.join(' → ')}</span>
+          <span className="hidden sm:inline text-xs text-slate-500 font-mono">{layerSizes.join(' → ')}</span>
+          <a
+            href="https://github.com/MrZoller/neural-viz/blob/main/docs/USER_GUIDE.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="User Guide"
+            className="text-xs px-2.5 py-1 rounded border bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-slate-200 transition-colors">
+            📖 <span className="hidden sm:inline">User Guide</span>
+          </a>
           <button onClick={openLessons}
             className={`text-xs px-2.5 py-1 rounded border transition-colors ${
               lessonsOpen
