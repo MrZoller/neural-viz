@@ -3233,6 +3233,7 @@ export default function App() {
             target="_blank"
             rel="noopener noreferrer"
             title="User Guide"
+            aria-label="User Guide"
             className="text-xs px-2.5 py-1 rounded border bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-slate-200 transition-colors">
             📖 <span className="hidden sm:inline">User Guide</span>
           </a>
