@@ -8,6 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Responsive / mobile layout** — the three-column desktop layout (left config · center visualizations · right PyTorch/math panels) is preserved at ≥ 1024 px, and stacks vertically in reading order on tablets and phones. The decision boundary and loss curve stack below `lg`, the decision-boundary canvas scales to fit its container (clicks/taps still map correctly), the training status bar and header wrap instead of overflowing, the optimizer-comparison modal fits small screens, and the math-detail tab area keeps an internal scroll region on mobile. Touch devices get larger tap targets and slider thumbs (`@media (pointer: coarse)`), and horizontal page scroll is suppressed.
+
 ### Changed
 - **Math core extracted from `App.jsx` into `src/nn/`** — activation functions, network (init/forward/loss/backprop/update/decision boundary), training/evaluation/convergence, and the finite-difference gradient check now live in dedicated, React-free modules (`activations.js`, `datasets.js`, `network.js`, `training.js`) re-exported through `src/nn/index.js`. Behaviour is unchanged; `App.jsx` imports the same functions it previously defined inline.
 
