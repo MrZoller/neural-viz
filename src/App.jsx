@@ -816,9 +816,9 @@ function DecisionBoundaryCanvas({ weights, biases, hiddenActivationTypes, datase
   return (
     <div className="relative">
       <canvas ref={canvasRef} width={CANVAS_SZ} height={CANVAS_SZ}
-        className="rounded border border-slate-700 block"
+        className="rounded border border-slate-700 block w-full max-w-[260px] h-auto mx-auto touch-manipulation"
         onClick={onClick}
-        style={{ cursor: onClick ? 'crosshair' : 'default' }} />
+        style={{ cursor: onClick ? 'crosshair' : 'default', aspectRatio: '1 / 1' }} />
       <div className="absolute top-1 left-1 text-xs text-slate-500 font-mono pointer-events-none">x₂↑</div>
     </div>
   );
@@ -2212,12 +2212,12 @@ function TrainingStatusBar({ status, epoch, loss, bestLoss, epochsSinceImprove, 
   };
   const cfg = statusConfig[status] || statusConfig.idle;
   return (
-    <div className={`${cfg.bg} border-b border-slate-700 px-5 py-1.5 flex items-center gap-6 text-xs`}>
+    <div className={`${cfg.bg} border-b border-slate-700 px-3 sm:px-5 py-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 sm:gap-x-6 text-xs`}>
       <div className="flex items-center gap-2">
         <span className={`w-2 h-2 rounded-full ${cfg.dot}`} />
         <span className={`font-bold ${cfg.color}`}>{cfg.label}</span>
       </div>
-      <div className="flex items-center gap-5 text-slate-400 font-mono">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 sm:gap-x-5 text-slate-400 font-mono">
         <span>Epoch: <span className="text-slate-200">{epoch}</span></span>
         {loss !== null && (
           <span>Loss: <span className={`font-bold ${loss < 0.01 ? 'text-emerald-400' : loss < 0.1 ? 'text-amber-400' : 'text-red-400'}`}>{loss.toFixed(5)}</span></span>
@@ -2233,7 +2233,7 @@ function TrainingStatusBar({ status, epoch, loss, bestLoss, epochsSinceImprove, 
         )}
       </div>
       {stopReason && (
-        <div className="ml-auto text-slate-500 truncate max-w-xs">{stopReason}</div>
+        <div className="w-full sm:w-auto sm:ml-auto text-slate-500 truncate sm:max-w-xs">{stopReason}</div>
       )}
     </div>
   );
@@ -3219,9 +3219,9 @@ export default function App() {
     : lastGradients;
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans flex flex-col">
+    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans flex flex-col overflow-x-hidden">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <header className="border-b border-slate-700 px-5 py-2.5 flex items-center justify-between flex-shrink-0">
+      <header className="border-b border-slate-700 px-3 sm:px-5 py-2.5 flex items-center justify-between gap-2 flex-shrink-0">
         <div>
           <h1 className="text-base font-bold text-white leading-tight">Neural Net Playground</h1>
           <p className="text-xs text-slate-500">Make the math visible.</p>
@@ -3259,13 +3259,13 @@ export default function App() {
         maxEpochs={maxEpochs}
       />
 
-      {/* ── Three-column body ─────────────────────────────────────────────── */}
-      <div className="flex flex-1 min-h-0">
+      {/* ── Three-column body (stacks vertically below lg) ─────────────────── */}
+      <div className="flex flex-col lg:flex-row flex-1 lg:min-h-0">
 
         {/* ═══════════════════════════════════════════════════════════════════
             LEFT PANEL — Architecture + Training Controls
         ═══════════════════════════════════════════════════════════════════ */}
-        <div className="w-52 border-r border-slate-700 p-3 flex flex-col gap-3 overflow-y-auto flex-shrink-0">
+        <div className="w-full lg:w-52 border-b lg:border-b-0 lg:border-r border-slate-700 p-3 flex flex-col gap-3 lg:overflow-y-auto flex-shrink-0">
           {/* Dataset */}
           <section>
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Dataset</h2>
@@ -3451,7 +3451,7 @@ export default function App() {
         {/* ═══════════════════════════════════════════════════════════════════
             CENTER PANEL — Network Graph + Boundary + Loss Curve
         ═══════════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 flex flex-col p-3 gap-3 min-w-0 overflow-hidden">
+        <div className="flex-1 flex flex-col p-3 gap-3 min-w-0 lg:overflow-hidden">
           {/* Callouts */}
           {activeCallouts.length > 0 && (
             <div className="flex flex-col gap-2 flex-shrink-0">
@@ -3599,8 +3599,8 @@ export default function App() {
             />
           </div>
 
-          {/* Bottom row: Decision Boundary + Loss Curve */}
-          <div className="flex gap-3 flex-shrink-0" style={{ height: '295px' }}>
+          {/* Bottom row: Decision Boundary + Loss Curve (stacks below lg) */}
+          <div className="flex flex-col lg:flex-row gap-3 flex-shrink-0 lg:h-[295px]">
             {/* Decision Boundary */}
             <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-2 flex-shrink-0">
               <div className="flex items-center justify-between mb-1">
@@ -3656,7 +3656,7 @@ export default function App() {
             </div>
 
             {/* Loss Curve */}
-            <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-2 flex-1 flex flex-col min-w-0">
+            <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-2 flex-1 flex flex-col min-w-0 min-h-[240px] lg:min-h-0">
               <h2 className="text-xs font-semibold text-slate-300 mb-1">BCE Loss Curve</h2>
               {lossHistory.length > 1 ? (
                 <div className="flex-1 min-h-0">
@@ -3695,7 +3695,7 @@ export default function App() {
         {/* ═══════════════════════════════════════════════════════════════════
             RIGHT PANEL — PyTorch + XOR Verify + Math Audit
         ═══════════════════════════════════════════════════════════════════ */}
-        <div className="w-80 border-l border-slate-700 flex flex-col overflow-hidden flex-shrink-0">
+        <div className="w-full lg:w-80 border-t lg:border-t-0 lg:border-l border-slate-700 flex flex-col lg:overflow-hidden flex-shrink-0">
 
           <PyTorchPanel
             layerSizes={layerSizes}
@@ -3714,7 +3714,7 @@ export default function App() {
           </div>
 
           {/* ── Math Audit / ∂w Check / Weights / Calculus — tabbed ── */}
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden border-b border-slate-700">
+          <div className="flex-1 min-h-[26rem] lg:min-h-0 flex flex-col overflow-hidden border-b border-slate-700">
             {/* Tab switcher — 4 tabs */}
             <div className="flex flex-shrink-0 border-b border-slate-700">
               {[
@@ -3727,7 +3727,7 @@ export default function App() {
                 <button key={id}
                   onClick={() => setRightPanelTab(id)}
                   style={{ fontSize: '11px' }}
-                  className={`flex-1 py-1.5 font-medium transition-colors ${
+                  className={`flex-1 py-1.5 font-medium whitespace-nowrap transition-colors ${
                     rightPanelTab === id
                       ? `${active} bg-slate-800/50 border-b-2`
                       : 'text-slate-500 hover:text-slate-300'
@@ -3826,9 +3826,9 @@ export default function App() {
 
       {/* ── Optimizer comparison overlay ─────────────────────────────────────── */}
       {compareData && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-3 sm:p-6"
           onClick={() => setCompareData(null)}>
-          <div className="bg-slate-900 border border-slate-700 rounded-lg shadow-2xl w-full max-w-3xl p-4"
+          <div className="bg-slate-900 border border-slate-700 rounded-lg shadow-2xl w-full max-w-3xl p-3 sm:p-4 max-h-[90vh] overflow-y-auto"
             onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-sm font-bold text-white">Optimizer comparison</h3>

@@ -10,3 +10,30 @@
 .edge-line {
   transition: stroke 0.3s ease, stroke-width 0.2s ease;
 }
+
+/* Prevent any accidental horizontal page scroll on small screens. */
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* Touch-friendly tweaks — only on coarse (touch) pointers, so the dense
+   desktop layout is untouched on mouse/trackpad devices. */
+@media (pointer: coarse) {
+  /* Bigger tap targets for the compact controls. */
+  button,
+  select {
+    min-height: 32px;
+  }
+
+  /* Fatter, easier-to-grab range slider thumbs. */
+  input[type="range"] {
+    height: 24px;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    transform: scale(1.4);
+  }
+  input[type="range"]::-moz-range-thumb {
+    transform: scale(1.4);
+  }
+}

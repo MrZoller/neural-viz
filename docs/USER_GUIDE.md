@@ -58,15 +58,17 @@ Open `http://localhost:5173` in your browser. The full app loads in the browser 
 
 ![Full app overview](screenshots/01-overview.png)
 
-The interface is divided into three columns:
+On a desktop-width screen the interface is divided into three columns:
 
 | Column | Width | Purpose |
 |---|---|---|
-| **Left** | ~260 px | Dataset, architecture, and training controls |
+| **Left** | ~210 px | Dataset, architecture, and training controls |
 | **Center** | Flexible | Network graph, decision boundary canvas, and loss curve |
 | **Right** | ~320 px | PyTorch mapping, XOR verification, and math-detail tabs |
 
 A status bar at the top shows training state (Not Started / Training / Paused / Converged), current epoch, and current loss.
+
+**Responsive layout.** The three-column layout applies at large widths (≥ 1024 px). On narrower screens — tablets in portrait and phones — the columns stack vertically in reading order (configuration, then visualizations, then PyTorch/math panels) and the page scrolls as a whole. The decision boundary and loss curve also stack, the decision-boundary canvas scales down to fit, and controls grow to touch-friendly sizes on touch devices. Some of the densest panels (the math-detail tabs) keep their own internal scroll area rather than forcing a long mobile page. The screenshots below were captured at desktop width.
 
 ---
 
