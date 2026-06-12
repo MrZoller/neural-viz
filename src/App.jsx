@@ -118,7 +118,7 @@ optimizer = ${pyOptimizer(optimizerType, learningRate).ctor}
 X = torch.tensor(${pts.X}, dtype=torch.float)
 y = torch.tensor(${pts.y}, dtype=torch.float)
 
-for epoch in range(max_epochs):
+for epoch in range(10_000):
     optimizer.zero_grad()    # clear ∂L/∂W
     out  = model(X)          # forward pass
     loss = criterion(out, y) # BCE loss
@@ -2801,14 +2801,16 @@ export default function App() {
       return { shouldStop: true };
     }
 
+    // Dismissing the plateau callout suppresses the notice, not the auto-stop.
     if (
       result.loss > PLATEAU_MIN_LOSS &&
-      epochsSinceImprovRef.current >= PLATEAU_PATIENCE &&
-      !dismissedCalloutsRef.current.has('lossPlateauing')
+      epochsSinceImprovRef.current >= PLATEAU_PATIENCE
     ) {
       setTrainingStatus('plateaued');
       setStopReason(`Loss has not improved by >${MIN_IMPROVEMENT} in ${PLATEAU_PATIENCE} epochs`);
-      setCallouts(prev => new Set([...prev, 'lossPlateauing']));
+      if (!dismissedCalloutsRef.current.has('lossPlateauing')) {
+        setCallouts(prev => new Set([...prev, 'lossPlateauing']));
+      }
       return { shouldStop: true };
     }
 
@@ -2866,6 +2868,14 @@ export default function App() {
       setIsTraining(false);
       setTrainingStatus('paused');
     } else {
+      // Resuming after a plateau stop grants a fresh patience window; otherwise
+      // the (still-elapsed) counter would re-trigger the stop on the next epoch.
+      if (trainingStatus === 'plateaued') {
+        epochsSinceImprovRef.current = 0;
+        setEpochsSinceImprovement(0);
+      }
+      // Drop any frozen animation snapshot so the graph shows live training data.
+      setForwardPassDisplay(null);
       setTrainingStatus('training');
       setStopReason('');
       setIsTraining(true);
@@ -2874,6 +2884,7 @@ export default function App() {
 
   const handleStepEpoch = () => {
     if (isTraining || stepModeStage !== 'idle') return;
+    setForwardPassDisplay(null);
     const { shouldStop } = runTrainingStep();
     if (shouldStop) setIsTraining(false);
     else setTrainingStatus('paused');
@@ -3037,7 +3048,12 @@ export default function App() {
         if (!stepModeAppliedRef.current) {
           stepModeAppliedRef.current = true;
           // Commit the previewed optimizer state (momentum/Adam buffers + timestep).
-          if (stepModeOptRef.current) optimizerRef.current = stepModeOptRef.current;
+          // Carry over the live learning rate: the clone was made when the step
+          // started, so an LR change made mid-step would otherwise be reverted.
+          if (stepModeOptRef.current) {
+            stepModeOptRef.current.cfg.lr = learningRateRef.current;
+            optimizerRef.current = stepModeOptRef.current;
+          }
           networkRef.current = { weights: stepModeResult.weights, biases: stepModeResult.biases };
           setNetwork({ weights: stepModeResult.weights, biases: stepModeResult.biases });
 
@@ -3079,14 +3095,15 @@ export default function App() {
             }
           } else if (
             stepModeResult.loss > PLATEAU_MIN_LOSS &&
-            epochsSinceImprovRef.current >= PLATEAU_PATIENCE &&
-            !dismissedCalloutsRef.current.has('lossPlateauing')
+            epochsSinceImprovRef.current >= PLATEAU_PATIENCE
           ) {
             setTrainingStatus('plateaued');
             setStopReason(
               `Loss has not improved by >${MIN_IMPROVEMENT} in ${PLATEAU_PATIENCE} epochs`
             );
-            setCallouts(prev => new Set([...prev, 'lossPlateauing']));
+            if (!dismissedCalloutsRef.current.has('lossPlateauing')) {
+              setCallouts(prev => new Set([...prev, 'lossPlateauing']));
+            }
           }
 
           // Vanishing gradient check — same logic as runTrainingStep
@@ -3172,6 +3189,9 @@ export default function App() {
   // activations propagating through the network layer-by-layer.
   const handleCanvasClick = async (e) => {
     if (!networkRef.current || isAnimatingRef.current) return;
+    // Don't fight the training loop or the explained-step display over
+    // animatingLayer / forwardPassDisplay.
+    if (isTraining || stepModeStage !== 'idle') return;
     const canvas = e.currentTarget;
     const rect   = canvas.getBoundingClientRect();
     const x1     = (e.clientX - rect.left) / rect.width;
