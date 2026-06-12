@@ -2884,6 +2884,13 @@ export default function App() {
 
   const handleStepEpoch = () => {
     if (isTraining || stepModeStage !== 'idle') return;
+    // Manually stepping past a plateau stop grants a fresh patience window,
+    // same as resuming via Train — otherwise the still-elapsed counter
+    // re-marks the run as plateaued on this very epoch.
+    if (trainingStatus === 'plateaued') {
+      epochsSinceImprovRef.current = 0;
+      setEpochsSinceImprovement(0);
+    }
     setForwardPassDisplay(null);
     const { shouldStop } = runTrainingStep();
     if (shouldStop) setIsTraining(false);
@@ -2985,6 +2992,12 @@ export default function App() {
   const startExplainedEpoch = useCallback(() => {
     if (!networkRef.current || isTraining || isAnimatingRef.current) return;
     if (stepModeStage !== 'idle') return;
+    // Same fresh patience window as Train / Step 1 Epoch when continuing
+    // past a plateau stop (the update stage re-runs the plateau check).
+    if (trainingStatus === 'plateaued') {
+      epochsSinceImprovRef.current = 0;
+      setEpochsSinceImprovement(0);
+    }
     const { weights, biases } = networkRef.current;
     // Preview on a throwaway optimizer clone so momentum/Adam buffers only
     // advance when the user actually applies the epoch (Stage 4), not on preview.
@@ -2998,7 +3011,7 @@ export default function App() {
     setStepModeLayerAnimDone(false);
     setStepModeStage('forward');
     setTrainingStatus('stepping');
-  }, [activationTypes, learningRate, isTraining, stepModeStage, dataset]);
+  }, [activationTypes, learningRate, isTraining, stepModeStage, dataset, trainingStatus]);
 
   // Per-stage layer animation: fires on every stage transition.
   // Uses a cancellation token so navigating away stops the in-flight animation.
