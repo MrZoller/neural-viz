@@ -2656,6 +2656,7 @@ export default function App() {
   const dismissedCalloutsRef  = useRef(new Set());
   const trainingLoopRef       = useRef(null);
   const isAnimatingRef        = useRef(false); // prevents concurrent animation runs
+  const animTokenRef          = useRef(0);     // bumped to cancel in-flight standalone animations
   const stepModeAutoTimerRef  = useRef(null);  // setTimeout ID for explained-step auto-play
   const stepModeAppliedRef    = useRef(false); // prevents double weight-apply on revisit of update stage
   const optimizerRef          = useRef(null);  // live optimizer (owns momentum/Adam buffers)
@@ -2689,6 +2690,7 @@ export default function App() {
     if (trainingLoopRef.current) cancelAnimationFrame(trainingLoopRef.current);
     trainingRef.current           = false;
     isAnimatingRef.current        = false;
+    animTokenRef.current         += 1; // cancel any in-flight standalone animation
     const net                     = initNetwork(layerSizes);
     networkRef.current            = net;
     optimizerRef.current          = createOptimizer(optimizerTypeRef.current, learningRateRef.current, net);
@@ -2861,6 +2863,28 @@ export default function App() {
   }, [isTraining, runTrainingStep]);
 
   // ── Control handlers ────────────────────────────────────────────────────────
+  // A manual resume grants a fresh patience window when the previous one is
+  // already exhausted — otherwise the still-elapsed no-improvement counter
+  // would re-trigger the plateau stop on the very next epoch. Keying on the
+  // counter (not the status label) also covers resumes after the status was
+  // overwritten, e.g. by closing an explained step.
+  const resetPlateauWindowIfExhausted = () => {
+    if (epochsSinceImprovRef.current >= PLATEAU_PATIENCE) {
+      epochsSinceImprovRef.current = 0;
+      setEpochsSinceImprovement(0);
+    }
+  };
+
+  // Cancel any in-flight standalone animation (Forward Pass ▶ / click-to-
+  // predict): bumping the token makes the async loop bail at its next await,
+  // so it can't write a stale snapshot back into forwardPassDisplay after
+  // training has started.
+  const cancelStandaloneAnimation = () => {
+    animTokenRef.current += 1;
+    isAnimatingRef.current = false;
+    setAnimatingLayer(-1);
+  };
+
   const handleToggleTraining = () => {
     if (stepModeStage !== 'idle') return; // don't interrupt explained step
     if (isTraining) {
@@ -2868,12 +2892,8 @@ export default function App() {
       setIsTraining(false);
       setTrainingStatus('paused');
     } else {
-      // Resuming after a plateau stop grants a fresh patience window; otherwise
-      // the (still-elapsed) counter would re-trigger the stop on the next epoch.
-      if (trainingStatus === 'plateaued') {
-        epochsSinceImprovRef.current = 0;
-        setEpochsSinceImprovement(0);
-      }
+      resetPlateauWindowIfExhausted();
+      cancelStandaloneAnimation();
       // Drop any frozen animation snapshot so the graph shows live training data.
       setForwardPassDisplay(null);
       setTrainingStatus('training');
@@ -2884,13 +2904,8 @@ export default function App() {
 
   const handleStepEpoch = () => {
     if (isTraining || stepModeStage !== 'idle') return;
-    // Manually stepping past a plateau stop grants a fresh patience window,
-    // same as resuming via Train — otherwise the still-elapsed counter
-    // re-marks the run as plateaued on this very epoch.
-    if (trainingStatus === 'plateaued') {
-      epochsSinceImprovRef.current = 0;
-      setEpochsSinceImprovement(0);
-    }
+    resetPlateauWindowIfExhausted();
+    cancelStandaloneAnimation();
     setForwardPassDisplay(null);
     const { shouldStop } = runTrainingStep();
     if (shouldStop) setIsTraining(false);
@@ -2957,6 +2972,7 @@ export default function App() {
   const runForwardPassAnimation = useCallback(async () => {
     if (!networkRef.current || isTraining || isAnimatingRef.current) return;
     isAnimatingRef.current = true;
+    const token = ++animTokenRef.current;
     const { weights, biases } = networkRef.current;
     const input = (dataset[0] || XOR_DATA[0]).input;
     const { activations, preActivations } = forwardPass(input, weights, biases, activationTypes);
@@ -2967,6 +2983,7 @@ export default function App() {
       setAnimatingLayer(l);
       setForwardPassDisplay({ activations: activations.slice(0, l + 1), preActivations });
       await new Promise(r => setTimeout(r, 450));
+      if (animTokenRef.current !== token) return; // cancelled (training started / reset)
     }
     setAnimatingLayer(-1);
     setForwardPassDisplay({ activations, preActivations });
@@ -2992,12 +3009,6 @@ export default function App() {
   const startExplainedEpoch = useCallback(() => {
     if (!networkRef.current || isTraining || isAnimatingRef.current) return;
     if (stepModeStage !== 'idle') return;
-    // Same fresh patience window as Train / Step 1 Epoch when continuing
-    // past a plateau stop (the update stage re-runs the plateau check).
-    if (trainingStatus === 'plateaued') {
-      epochsSinceImprovRef.current = 0;
-      setEpochsSinceImprovement(0);
-    }
     const { weights, biases } = networkRef.current;
     // Preview on a throwaway optimizer clone so momentum/Adam buffers only
     // advance when the user actually applies the epoch (Stage 4), not on preview.
@@ -3011,7 +3022,7 @@ export default function App() {
     setStepModeLayerAnimDone(false);
     setStepModeStage('forward');
     setTrainingStatus('stepping');
-  }, [activationTypes, learningRate, isTraining, stepModeStage, dataset, trainingStatus]);
+  }, [activationTypes, learningRate, isTraining, stepModeStage, dataset]);
 
   // Per-stage layer animation: fires on every stage transition.
   // Uses a cancellation token so navigating away stops the in-flight animation.
@@ -3061,8 +3072,9 @@ export default function App() {
         if (!stepModeAppliedRef.current) {
           stepModeAppliedRef.current = true;
           // Commit the previewed optimizer state (momentum/Adam buffers + timestep).
-          // Carry over the live learning rate: the clone was made when the step
-          // started, so an LR change made mid-step would otherwise be reverted.
+          // The LR/optimizer controls are locked during a step, but carry over the
+          // live learning rate anyway in case a non-UI path (e.g. a lesson setup)
+          // changed it — the clone's cfg.lr predates the step otherwise.
           if (stepModeOptRef.current) {
             stepModeOptRef.current.cfg.lr = learningRateRef.current;
             optimizerRef.current = stepModeOptRef.current;
@@ -3076,6 +3088,13 @@ export default function App() {
           lossHistoryRef.current = [...lossHistoryRef.current,
             { epoch: epochRef.current, loss: stepModeResult.loss }].slice(-200);
           setLossHistory([...lossHistoryRef.current]);
+
+          // Committing an epoch past a plateau stop grants a fresh patience
+          // window — deferred to here so closing the preview early (without
+          // applying the update) does not reset the counter.
+          if (epochsSinceImprovRef.current >= PLATEAU_PATIENCE) {
+            epochsSinceImprovRef.current = 0;
+          }
 
           if (stepModeResult.loss < bestLossRef.current - MIN_IMPROVEMENT) {
             bestLossRef.current          = stepModeResult.loss;
@@ -3222,6 +3241,7 @@ export default function App() {
 
     // Animate the forward pass through the network for this custom point
     isAnimatingRef.current = true;
+    const token = ++animTokenRef.current;
     for (let l = 0; l <= layerSizes.length - 1; l++) {
       setAnimatingLayer(l);
       setForwardPassDisplay({
@@ -3229,6 +3249,7 @@ export default function App() {
         preActivations,
       });
       await new Promise(r => setTimeout(r, 370));
+      if (animTokenRef.current !== token) return; // cancelled (training started / reset)
     }
     setAnimatingLayer(-1);
     setForwardPassDisplay({ activations, preActivations });
@@ -3381,8 +3402,12 @@ export default function App() {
 
             <label className="block mb-1">
               <span className="text-xs text-slate-400">Optimizer</span>
+              {/* Locked during an explained step: the previewed epoch was computed
+                  with the optimizer/LR at step start, so changing them mid-step
+                  would commit an update that no longer matches the displayed math. */}
               <select value={optimizerType} onChange={e => setOptimizerType(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-600 rounded text-xs text-white p-1 mt-0.5">
+                disabled={stepModeStage !== 'idle'}
+                className="w-full bg-slate-800 border border-slate-600 rounded text-xs text-white p-1 mt-0.5 disabled:opacity-40 disabled:cursor-not-allowed">
                 {Object.values(OPTIMIZERS).map(o => (
                   <option key={o.id} value={o.id}>{o.label}</option>
                 ))}
@@ -3396,7 +3421,8 @@ export default function App() {
               <span className="text-xs text-slate-400">LR: {learningRate.toFixed(3)}</span>
               <input type="range" min="0.001" max="1" step="0.001" value={learningRate}
                 onChange={e => setLearningRate(parseFloat(e.target.value))}
-                className="w-full mt-0.5 accent-blue-500" />
+                disabled={stepModeStage !== 'idle'}
+                className="w-full mt-0.5 accent-blue-500 disabled:opacity-40 disabled:cursor-not-allowed" />
             </label>
 
             <label className="block mb-2">
